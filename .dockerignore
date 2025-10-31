@@ -9,7 +9,7 @@ venv/
 ENV/
 
 # IDE
-.idea/
+.idea/*
 .vscode/
 *.swo
 
