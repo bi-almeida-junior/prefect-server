@@ -177,3 +177,6 @@ pyrightconfig.json
 
 # COMMANDS
 COMMANDS
+
+#  .idea
+.idea/

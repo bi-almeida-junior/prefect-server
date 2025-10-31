@@ -4,9 +4,9 @@ services:
     container_name: prefect-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-prefect}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prefect}
-      POSTGRES_DB: ${POSTGRES_DB:-prefect}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -34,7 +34,7 @@ services:
         condition: service_healthy
     command: prefect server start --host 0.0.0.0 --no-services
     environment:
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
       PREFECT_MESSAGING_CACHE: prefect_redis.messaging
       PREFECT_SERVER_EVENTS_CAUSAL_ORDERING: prefect_redis.ordering
@@ -54,7 +54,7 @@ services:
         condition: service_healthy
     command: prefect server services start
     environment:
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
       PREFECT_MESSAGING_CACHE: prefect_redis.messaging
       PREFECT_SERVER_EVENTS_CAUSAL_ORDERING: prefect_redis.ordering
