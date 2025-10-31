@@ -421,8 +421,9 @@ if __name__ == "__main__":
     ).deploy(
         name="salesforce-sftp-to-snowflake",
         work_pool_name="local-pool",
-        # Executa diariamente às 2h da manhã
-        cron="0 2 * * *",
+        # Executa diariamente às 4h da manhã (horário de Brasília)
+        cron="0 4 * * *",
+        timezone="America/Sao_Paulo",
         tags=["salesforce", "sftp", "snowflake", "etl"],
         parameters={
             "sftp_base_path": "Import"
