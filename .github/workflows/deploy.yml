@@ -1,0 +1,146 @@
+name: Deploy to Prefect Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files in flows directory
+        id: changed-flows
+        run: |
+          # Get list of changed Python files in flows directory
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '^flows/.*\.py$' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No Python files changed in flows directory"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changed files:"
+            echo "$CHANGED_FILES"
+
+            # Convert newlines to commas for easier processing
+            CHANGED_FILES_LIST=$(echo "$CHANGED_FILES" | tr '\n' ',' | sed 's/,$//')
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "files=$CHANGED_FILES_LIST" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install sshpass
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Setup SSH config
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts || true
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+
+      - name: Deploy to VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+          VM_PROJECT_PATH: /opt/prefect-server
+        run: |
+          # Create project directory if it doesn't exist
+          sshpass -p "$VM_PASSWORD" ssh $VM_USER@$VM_HOST "mkdir -p $VM_PROJECT_PATH"
+
+          # Sync files to VM (excluding git, pycache, and other unnecessary files)
+          sshpass -p "$VM_PASSWORD" rsync -avz --delete \
+            --exclude '.git' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.env' \
+            --exclude 'venv' \
+            --exclude '.idea' \
+            ./ $VM_USER@$VM_HOST:$VM_PROJECT_PATH/
+
+          echo "Files deployed successfully to $VM_HOST:$VM_PROJECT_PATH"
+
+      - name: Restart Docker containers
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+          VM_PROJECT_PATH: /opt/prefect-server
+        run: |
+          sshpass -p "$VM_PASSWORD" ssh $VM_USER@$VM_HOST << 'EOF'
+            cd ${{ env.VM_PROJECT_PATH }}
+
+            # Check if .env file exists
+            if [ ! -f .env ]; then
+              echo "Warning: .env file not found. Please ensure environment variables are configured."
+            fi
+
+            # Restart containers
+            docker-compose down
+            docker-compose up -d --build
+
+            echo "Docker containers restarted successfully"
+          EOF
+
+      - name: Wait for containers to be ready
+        if: steps.changed-flows.outputs.has_changes == 'true'
+        run: |
+          echo "Waiting 30 seconds for containers to initialize..."
+          sleep 30
+
+      - name: Deploy changed flows
+        if: steps.changed-flows.outputs.has_changes == 'true'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+          VM_PROJECT_PATH: /opt/prefect-server
+          CHANGED_FILES: ${{ steps.changed-flows.outputs.files }}
+        run: |
+          sshpass -p "$VM_PASSWORD" ssh $VM_USER@$VM_HOST << 'EOF'
+            cd ${{ env.VM_PROJECT_PATH }}
+
+            # Convert comma-separated files back to array
+            IFS=',' read -ra FILES <<< "${{ env.CHANGED_FILES }}"
+
+            echo "Deploying flows to Prefect..."
+
+            for file in "${FILES[@]}"; do
+              if [ -f "$file" ]; then
+                echo "Deploying: $file"
+                docker exec -it prefect-client python /opt/prefect/$file
+
+                if [ $? -eq 0 ]; then
+                  echo "Successfully deployed: $file"
+                else
+                  echo "Error deploying: $file"
+                  exit 1
+                fi
+              else
+                echo "Warning: File not found: $file"
+              fi
+            done
+
+            echo "All flows deployed successfully!"
+          EOF
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "Deployment completed!"
+          echo "Target: ${{ secrets.VM_HOST }}"
+          echo "Project path: /opt/prefect-server"
+
+          if [ "${{ steps.changed-flows.outputs.has_changes }}" == "true" ]; then
+            echo "Deployed flows:"
+            echo "${{ steps.changed-flows.outputs.files }}" | tr ',' '\n'
+          else
+            echo "No flow files were changed in this commit"
+          fi
