@@ -53,7 +53,7 @@ jobs:
           VM_PROJECT_PATH: /opt/prefect-server
         run: |
           # Create project directory if it doesn't exist
-          sshpass -p "$VM_PASSWORD" ssh $VM_USER@$VM_HOST "mkdir -p $VM_PROJECT_PATH"
+          sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $VM_USER@$VM_HOST "mkdir -p $VM_PROJECT_PATH"
 
           # Sync files to VM (excluding git, pycache, and other unnecessary files)
           sshpass -p "$VM_PASSWORD" rsync -avz --delete \
@@ -74,20 +74,13 @@ jobs:
           VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
           VM_PROJECT_PATH: /opt/prefect-server
         run: |
-          sshpass -p "$VM_PASSWORD" ssh $VM_USER@$VM_HOST << 'EOF'
-            cd ${{ env.VM_PROJECT_PATH }}
-
-            # Check if .env file exists
-            if [ ! -f .env ]; then
-              echo "Warning: .env file not found. Please ensure environment variables are configured."
-            fi
-
-            # Restart containers
-            docker-compose down
-            docker-compose up -d --build
-
-            echo "Docker containers restarted successfully"
-          EOF
+          sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $VM_USER@$VM_HOST "cd $VM_PROJECT_PATH && \
+            if [ ! -f .env ]; then \
+              echo 'Warning: .env file not found. Please ensure environment variables are configured.'; \
+            fi && \
+            docker-compose down && \
+            docker-compose up -d --build && \
+            echo 'Docker containers restarted successfully'"
 
       - name: Wait for containers to be ready
         if: steps.changed-flows.outputs.has_changes == 'true'
@@ -104,32 +97,30 @@ jobs:
           VM_PROJECT_PATH: /opt/prefect-server
           CHANGED_FILES: ${{ steps.changed-flows.outputs.files }}
         run: |
-          sshpass -p "$VM_PASSWORD" ssh $VM_USER@$VM_HOST << 'EOF'
-            cd ${{ env.VM_PROJECT_PATH }}
+          # Convert comma-separated files to space-separated for easier iteration
+          FILES_TO_DEPLOY=$(echo "$CHANGED_FILES" | tr ',' ' ')
 
-            # Convert comma-separated files back to array
-            IFS=',' read -ra FILES <<< "${{ env.CHANGED_FILES }}"
+          echo "Deploying flows to Prefect..."
 
-            echo "Deploying flows to Prefect..."
+          for file in $FILES_TO_DEPLOY; do
+            echo "Deploying: $file"
 
-            for file in "${FILES[@]}"; do
-              if [ -f "$file" ]; then
-                echo "Deploying: $file"
-                docker exec -it prefect-client python /opt/prefect/$file
+            sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $VM_USER@$VM_HOST \
+              "cd $VM_PROJECT_PATH && \
+              if [ -f $file ]; then \
+                docker exec prefect-client python /opt/prefect/$file && \
+                echo 'Successfully deployed: $file'; \
+              else \
+                echo 'Warning: File not found: $file'; \
+              fi"
 
-                if [ $? -eq 0 ]; then
-                  echo "Successfully deployed: $file"
-                else
-                  echo "Error deploying: $file"
-                  exit 1
-                fi
-              else
-                echo "Warning: File not found: $file"
-              fi
-            done
+            if [ $? -ne 0 ]; then
+              echo "Error deploying: $file"
+              exit 1
+            fi
+          done
 
-            echo "All flows deployed successfully!"
-          EOF
+          echo "All flows deployed successfully!"
 
       - name: Deployment summary
         if: always()
