@@ -10,6 +10,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.VM_HOST }}" ]; then
+            echo "ERROR: Secret VM_HOST is not set!"
+            echo "Please configure the following secrets in GitHub:"
+            echo "  - VM_HOST (example: 10.60.10.190)"
+            echo "  - VM_USER (example: root)"
+            echo "  - VM_PASSWORD (your SSH password)"
+            echo ""
+            echo "To configure secrets:"
+            echo "1. Go to your repository on GitHub"
+            echo "2. Click on Settings > Secrets and variables > Actions"
+            echo "3. Click 'New repository secret' and add each secret"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.VM_USER }}" ]; then
+            echo "ERROR: Secret VM_USER is not set!"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.VM_PASSWORD }}" ]; then
+            echo "ERROR: Secret VM_PASSWORD is not set!"
+            exit 1
+          fi
+
+          echo "All required secrets are configured."
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
