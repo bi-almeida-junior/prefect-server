@@ -12,26 +12,9 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-from shared.connections.sftp import (
-    connect_sftp,
-    get_latest_file,
-    download_csv_from_sftp,
-    normalize_csv_header,
-    close_sftp_connection
-)
-
-from shared.connections.snowflake import (
-    connect_snowflake,
-    create_table_if_not_exists,
-    insert_csv_file_replace,
-    close_snowflake_connection,
-    SALESFORCE_TABLES_SCHEMAS
-)
-
-from shared.alerts import (
-    send_flow_success_alert,
-    send_flow_error_alert
-)
+from shared.connections.sftp import connect_sftp, get_latest_file, download_csv_from_sftp, normalize_csv_header, close_sftp_connection
+from shared.connections.snowflake import connect_snowflake, create_table_if_not_exists, insert_csv_file_replace, close_snowflake_connection, SALESFORCE_TABLES_SCHEMAS
+from shared.alerts import send_flow_success_alert,send_flow_error_alert
 
 # Carrega variáveis de ambiente
 load_dotenv()
