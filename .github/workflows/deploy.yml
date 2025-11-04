@@ -73,10 +73,27 @@ jobs:
             echo "files=$CHANGED_FILES_LIST" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install sshpass
+      - name: Check required tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
+          # Check if sshpass is installed
+          if ! command -v sshpass &> /dev/null; then
+            echo "ERROR: sshpass is not installed on the self-hosted runner!"
+            echo ""
+            echo "Please install sshpass on the runner machine:"
+            echo "  - RHEL/CentOS/Rocky: sudo yum install sshpass"
+            echo "  - Ubuntu/Debian: sudo apt-get install sshpass"
+            echo "  - Fedora: sudo dnf install sshpass"
+            exit 1
+          fi
+
+          # Check if rsync is installed
+          if ! command -v rsync &> /dev/null; then
+            echo "ERROR: rsync is not installed on the self-hosted runner!"
+            echo "Please install rsync on the runner machine"
+            exit 1
+          fi
+
+          echo "All required tools are installed."
 
       - name: Setup SSH config
         run: |
