@@ -134,8 +134,8 @@ jobs:
             if [ ! -f .env ]; then \
               echo 'Warning: .env file not found. Please ensure environment variables are configured.'; \
             fi && \
-            docker-compose down && \
-            docker-compose up -d --build && \
+            docker compose down && \
+            docker compose up -d --build && \
             echo 'Docker containers restarted successfully'"
 
       - name: Wait for containers to be ready

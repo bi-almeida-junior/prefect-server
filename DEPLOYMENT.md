@@ -2,6 +2,89 @@
 
 Este documento descreve como configurar e utilizar o sistema de deploy automático para o Prefect Server.
 
+## Pré-requisitos do Servidor de Destino
+
+Antes de configurar o GitHub Actions, certifique-se de que o servidor de destino (10.60.10.190) tem todas as dependências instaladas.
+
+### Instalação Automática (Recomendado)
+
+Execute o script de instalação no servidor de destino:
+
+```bash
+# SSH no servidor
+ssh root@10.60.10.190
+
+# Baixar o script (ou transferir via rsync/scp)
+curl -O https://raw.githubusercontent.com/bi-almeida-junior/prefect-server/main/setup-server.sh
+
+# Dar permissão de execução
+chmod +x setup-server.sh
+
+# Executar (como usuário normal com sudo, NÃO como root)
+./setup-server.sh
+```
+
+### Instalação Manual
+
+Se preferir instalar manualmente:
+
+#### 1. Instalar Docker
+
+```bash
+# Fedora
+sudo dnf install -y dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# RHEL/CentOS/Rocky Linux
+sudo yum install -y yum-utils
+sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Iniciar Docker
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Adicionar usuário ao grupo docker
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+#### 2. Instalar Docker Compose (standalone)
+
+```bash
+# Baixar Docker Compose
+sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+
+# Dar permissão de execução
+sudo chmod +x /usr/local/bin/docker-compose
+
+# Verificar instalação
+docker-compose --version
+```
+
+#### 3. Criar diretório do projeto
+
+```bash
+sudo mkdir -p /opt/prefect-server
+sudo chown $USER:$USER /opt/prefect-server
+```
+
+#### 4. Verificar portas necessárias
+
+```bash
+# Verificar se as portas estão disponíveis
+sudo ss -tulpn | grep -E ':(4200|5432|6379) '
+```
+
+#### 5. Configurar Firewall (se necessário)
+
+```bash
+# Abrir porta 4200 para o Prefect UI
+sudo firewall-cmd --permanent --add-port=4200/tcp
+sudo firewall-cmd --reload
+```
+
 ## Configuração do GitHub Actions
 
 ### 1. Configurar Secrets no GitHub
@@ -128,17 +211,17 @@ ssh usuario@10.60.10.190
 cd /opt/prefect-server
 
 # Ver logs de todos os containers
-docker-compose logs -f
+docker compose logs -f
 
 # Ver logs de um container específico
-docker-compose logs -f prefect-client
-docker-compose logs -f prefect-api
+docker compose logs -f prefect-client
+docker compose logs -f prefect-api
 ```
 
 ### Verificar status dos containers
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 ### Acessar o Prefect UI
@@ -168,7 +251,7 @@ Se um flow falhar no deploy:
 
 2. Verifique os logs do container:
    ```bash
-   docker-compose logs prefect-client
+   docker compose logs prefect-client
    ```
 
 ### Containers não iniciam
