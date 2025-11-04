@@ -11,33 +11,43 @@ jobs:
     environment: servidor_local
 
     steps:
-      - name: Validate required secrets
+      - name: Validate required configuration
         run: |
-          if [ -z "${{ secrets.VM_HOST }}" ]; then
-            echo "ERROR: Secret VM_HOST is not set!"
-            echo "Please configure the following secrets in GitHub:"
-            echo "  - VM_HOST (example: 10.60.10.190)"
-            echo "  - VM_USER (example: root)"
-            echo "  - VM_PASSWORD (your SSH password)"
-            echo ""
-            echo "To configure secrets:"
-            echo "1. Go to your repository on GitHub"
-            echo "2. Click on Settings > Secrets and variables > Actions"
-            echo "3. Click 'New repository secret' and add each secret"
+          # Check for VM_HOST (can be in secrets or variables)
+          VM_HOST="${{ secrets.VM_HOST }}"
+          if [ -z "$VM_HOST" ]; then
+            VM_HOST="${{ vars.VM_HOST }}"
+          fi
+
+          # Check for VM_USER (can be in secrets or variables)
+          VM_USER="${{ secrets.VM_USER }}"
+          if [ -z "$VM_USER" ]; then
+            VM_USER="${{ vars.VM_USER }}"
+          fi
+
+          # Check for VM_PASSWORD (should be in secrets)
+          VM_PASSWORD="${{ secrets.VM_PASSWORD }}"
+
+          if [ -z "$VM_HOST" ]; then
+            echo "ERROR: VM_HOST is not set!"
+            echo "Please configure VM_HOST in GitHub environment 'servidor_local'"
+            echo "Go to: Settings > Environments > servidor_local > Add variable or secret"
             exit 1
           fi
 
-          if [ -z "${{ secrets.VM_USER }}" ]; then
-            echo "ERROR: Secret VM_USER is not set!"
+          if [ -z "$VM_USER" ]; then
+            echo "ERROR: VM_USER is not set!"
             exit 1
           fi
 
-          if [ -z "${{ secrets.VM_PASSWORD }}" ]; then
-            echo "ERROR: Secret VM_PASSWORD is not set!"
+          if [ -z "$VM_PASSWORD" ]; then
+            echo "ERROR: VM_PASSWORD is not set!"
             exit 1
           fi
 
-          echo "All required secrets are configured."
+          echo "All required configuration is set."
+          echo "VM_HOST: $VM_HOST"
+          echo "VM_USER: $VM_USER"
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -71,13 +81,13 @@ jobs:
       - name: Setup SSH config
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts || true
+          ssh-keyscan -H ${{ secrets.VM_HOST || vars.VM_HOST }} >> ~/.ssh/known_hosts || true
           echo "StrictHostKeyChecking no" >> ~/.ssh/config
 
       - name: Deploy to VM
         env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
+          VM_HOST: ${{ secrets.VM_HOST || vars.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER || vars.VM_USER }}
           VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
           VM_PROJECT_PATH: /opt/prefect-server
         run: |
@@ -98,8 +108,8 @@ jobs:
 
       - name: Restart Docker containers
         env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
+          VM_HOST: ${{ secrets.VM_HOST || vars.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER || vars.VM_USER }}
           VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
           VM_PROJECT_PATH: /opt/prefect-server
         run: |
@@ -120,8 +130,8 @@ jobs:
       - name: Deploy changed flows
         if: steps.changed-flows.outputs.has_changes == 'true'
         env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
+          VM_HOST: ${{ secrets.VM_HOST || vars.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER || vars.VM_USER }}
           VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
           VM_PROJECT_PATH: /opt/prefect-server
           CHANGED_FILES: ${{ steps.changed-flows.outputs.files }}
@@ -155,7 +165,7 @@ jobs:
         if: always()
         run: |
           echo "Deployment completed!"
-          echo "Target: ${{ secrets.VM_HOST }}"
+          echo "Target: ${{ secrets.VM_HOST || vars.VM_HOST }}"
           echo "Project path: /opt/prefect-server"
 
           if [ "${{ steps.changed-flows.outputs.has_changes }}" == "true" ]; then
