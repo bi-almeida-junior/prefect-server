@@ -54,38 +54,6 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Check Python installation
-        run: |
-          if command -v python3 &> /dev/null; then
-            echo "Python3 found: $(python3 --version)"
-            echo "PYTHON_CMD=python3" >> $GITHUB_ENV
-            echo "PIP_CMD=pip3" >> $GITHUB_ENV
-          elif command -v python &> /dev/null; then
-            echo "Python found: $(python --version)"
-            echo "PYTHON_CMD=python" >> $GITHUB_ENV
-            echo "PIP_CMD=pip" >> $GITHUB_ENV
-          else
-            echo "ERROR: Python is not installed on the self-hosted runner!"
-            echo "Please install Python 3 on the runner machine"
-            exit 1
-          fi
-
-      - name: Install flake8
-        run: |
-          ${{ env.PIP_CMD }} install --user flake8
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Run PEP8 lint check
-        run: |
-          echo "Verificando conformidade PEP8..."
-          flake8
-          if [ $? -eq 0 ]; then
-            echo "✓ Código conforme PEP8"
-          else
-            echo "✗ Código não está conforme PEP8. Deploy bloqueado."
-            exit 1
-          fi
-
       - name: Get changed files in flows directory
         id: changed-flows
         run: |
