@@ -26,14 +26,14 @@ def send_monitoring_alert(
     }
 
     try:
-        print(f"\n{'='*60}")
-        print(f"📤 ENVIANDO ALERTA")
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print("📤 ENVIANDO ALERTA")
+        print(f"{'=' * 60}")
         print(f"🌐 URL: {api_url}")
         print(f"👥 Group ID: {group_id}")
         print(f"📏 Tamanho da mensagem: {len(message)} caracteres")
         print(f"📝 Primeiros 100 chars: {message[:100]}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         response = requests.post(api_url, json=body, timeout=10, headers={'Content-Type': 'application/json'})
 
@@ -41,7 +41,7 @@ def send_monitoring_alert(
         print(f"📥 Response: {response.text}\n")
 
         response.raise_for_status()
-        print(f"✅ Alerta enviado com sucesso!")
+        print("✅ Alerta enviado com sucesso!")
         return True
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro ao enviar alerta: {e}")

@@ -1,0 +1,55 @@
+[flake8]
+# Configuração do Flake8 para garantir conformidade com PEP8
+
+# Comprimento máximo de linha (PEP 8 recomenda 79, mas 200 é mais prático)
+max-line-length = 200
+
+# Complexidade ciclomática máxima (quanto menor, mais simples o código)
+max-complexity = 10
+
+# Arquivos e diretórios a ignorar
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    .env,
+    build,
+    dist,
+    *.egg-info,
+    .pytest_cache,
+    .mypy_cache,
+    .idea,
+    .vscode,
+    get-pip.py
+
+# Erros e warnings a ignorar
+# E203: whitespace before ':' (conflita com black)
+# E501: line too long (já controlado por max-line-length)
+# W503: line break before binary operator (conflita com PEP 8 atualizado)
+# D100: Missing docstring in public module (muito restritivo no início)
+# D104: Missing docstring in public package (muito restritivo no início)
+# D107: Missing docstring in __init__ (muito restritivo no início)
+ignore = E203, W503
+
+# Erros que devem ser sempre checados (adicione mais conforme necessário)
+select =
+    E,  # Erros PEP8
+    W,  # Warnings PEP8
+    F,  # Erros do PyFlakes
+    C,  # Complexidade
+    N,  # Nomenclatura PEP8
+
+# Configuração de docstrings (pode ser relaxada inicialmente)
+docstring-convention = google
+
+# Por arquivo, quantos erros podem ser reportados
+per-file-ignores =
+    __init__.py:F401,D104
+    tests/*:D100,D101,D102,D103
+
+# Estatísticas
+statistics = True
+count = True
+show-source = True

@@ -89,7 +89,7 @@ def connect_snowflake(
             insecure_mode=True  # Desabilita validação SSL (necessário em alguns ambientes corporativos/Docker)
         )
 
-        logger.info(f"✅ Conexão Snowflake estabelecida com sucesso")
+        logger.info("✅ Conexão Snowflake estabelecida com sucesso")
         return conn
 
     except Exception as e:
@@ -238,10 +238,10 @@ def insert_csv_file_replace(
         put_path = csv_file_path.replace('\\', '/')
         put_sql = f"PUT 'file://{put_path}' {stage_name} AUTO_COMPRESS=TRUE OVERWRITE=TRUE"
         cursor.execute(put_sql)
-        logger.info(f"✅ Arquivo enviado para stage")
+        logger.info("✅ Arquivo enviado para stage")
 
         # 4. COPY INTO (carrega tudo em paralelo)
-        logger.info(f"⚡ Executando COPY INTO (bulk load paralelo)...")
+        logger.info("⚡ Executando COPY INTO (bulk load paralelo)...")
 
         quoted_columns = [f'"{col}"' for col in columns]
 
@@ -272,7 +272,7 @@ def insert_csv_file_replace(
         logger.info(f"✅ {rows_loaded} registros carregados via COPY INTO")
 
         # 5. REMOVE arquivo do stage (limpeza)
-        logger.info(f"🧹 Removendo arquivo do stage...")
+        logger.info("🧹 Removendo arquivo do stage...")
         remove_sql = f"REMOVE {stage_name}/{file_name}.gz"
         cursor.execute(remove_sql)
 

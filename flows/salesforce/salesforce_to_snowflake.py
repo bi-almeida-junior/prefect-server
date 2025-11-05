@@ -12,9 +12,18 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-from shared.connections.sftp import connect_sftp, get_latest_file, download_csv_from_sftp, normalize_csv_header, close_sftp_connection
-from shared.connections.snowflake import connect_snowflake, create_table_if_not_exists, insert_csv_file_replace, close_snowflake_connection, SALESFORCE_TABLES_SCHEMAS
-from shared.alerts import send_flow_success_alert,send_flow_error_alert
+from shared.connections.sftp import (  # noqa: E402
+    connect_sftp, get_latest_file, download_csv_from_sftp,
+    normalize_csv_header, close_sftp_connection
+)
+from shared.connections.snowflake import (  # noqa: E402
+    connect_snowflake, create_table_if_not_exists,
+    insert_csv_file_replace, close_snowflake_connection,
+    SALESFORCE_TABLES_SCHEMAS
+)
+from shared.alerts import (  # noqa: E402
+    send_flow_success_alert, send_flow_error_alert
+)
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -116,7 +125,7 @@ def process_sftp(
     logger.info(f"📝 Mapeamento: {len(column_mapping)} colunas")
 
     # 4. Normaliza cabeçalho do CSV
-    logger.info(f"🔄 Normalizando cabeçalho para snake_case...")
+    logger.info("🔄 Normalizando cabeçalho para snake_case...")
     normalized_csv_path = normalize_csv_header(
         csv_info["file_path"],
         csv_info["encoding"],
@@ -157,7 +166,7 @@ def process_sftp(
     # 9. Limpa arquivo temporário
     try:
         os.unlink(normalized_csv_path)
-    except:
+    except OSError:
         pass
 
     return {
@@ -171,7 +180,7 @@ def process_sftp(
 
 
 @flow(log_prints=True, name="salesforce-sftp-to-snowflake")
-def salesforce_to_snowflake(
+def salesforce_to_snowflake(  # noqa: C901
         streams_to_process: Optional[list[str]] = None,
         sftp_host: Optional[str] = None,
         sftp_username: Optional[str] = None,
@@ -315,7 +324,7 @@ def salesforce_to_snowflake(
                 try:
                     context = get_run_context()
                     job_id = str(context.flow_run.id) if hasattr(context, 'flow_run') else None
-                except:
+                except Exception:
                     job_id = None
 
                 send_flow_success_alert(
@@ -358,7 +367,7 @@ def salesforce_to_snowflake(
                 try:
                     context = get_run_context()
                     job_id = str(context.flow_run.id) if hasattr(context, 'flow_run') else None
-                except:
+                except Exception:
                     job_id = None
 
                 # Tenta coletar métricas parciais se houver
@@ -372,7 +381,7 @@ def salesforce_to_snowflake(
                             "records_loaded": partial_rows,
                             "bytes_processed": partial_bytes
                         }
-                except:
+                except Exception:
                     pass
 
                 send_flow_error_alert(
@@ -404,7 +413,7 @@ if __name__ == "__main__":
     ).deploy(
         name="salesforce-sftp-to-snowflake",
         work_pool_name="local-pool",
-        # Executa diariamente às 4h da manhã (horário de Brasília)
+        # Executa diariamente às 4h da manhã
         cron="0 4 * * *",
         tags=["salesforce", "sftp", "snowflake", "etl"],
         parameters={

@@ -54,6 +54,26 @@ jobs:
         with:
           fetch-depth: 2
 
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install flake8
+        run: |
+          pip install flake8
+
+      - name: Run PEP8 lint check
+        run: |
+          echo "Verificando conformidade PEP8..."
+          flake8
+          if [ $? -eq 0 ]; then
+            echo "✓ Código conforme PEP8"
+          else
+            echo "✗ Código não está conforme PEP8. Deploy bloqueado."
+            exit 1
+          fi
+
       - name: Get changed files in flows directory
         id: changed-flows
         run: |
@@ -137,6 +157,31 @@ jobs:
             docker compose down && \
             docker compose up -d --build && \
             echo 'Docker containers restarted successfully'"
+
+      - name: Cleanup Docker images
+        env:
+          VM_HOST: ${{ secrets.VM_HOST || vars.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER || vars.VM_USER }}
+          VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+          VM_PROJECT_PATH: /opt/prefect-server
+        run: |
+          sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $VM_USER@$VM_HOST "cd $VM_PROJECT_PATH && \
+            echo 'Starting Docker cleanup...' && \
+            echo 'Disk usage before cleanup:' && \
+            docker system df && \
+            echo '' && \
+            echo 'Removing dangling images (untagged)...' && \
+            docker image prune -f && \
+            echo '' && \
+            echo 'Removing unused build cache...' && \
+            docker builder prune -f --filter 'until=24h' && \
+            echo '' && \
+            echo 'Removing stopped containers older than 24h...' && \
+            docker container prune -f --filter 'until=24h' && \
+            echo '' && \
+            echo 'NOTE: Database volumes are preserved automatically' && \
+            echo 'Disk usage after cleanup:' && \
+            docker system df"
 
       - name: Wait for containers to be ready
         if: steps.changed-flows.outputs.has_changes == 'true'

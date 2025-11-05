@@ -104,7 +104,7 @@ def _load_key_from_string(key_string: str, passphrase: Optional[str] = None):
         try:
             key_file = io.StringIO(key_string)
             return key_class.from_private_key(key_file, password=passphrase)
-        except:
+        except Exception:
             continue
 
     raise Exception(
@@ -122,7 +122,7 @@ def _load_key_from_file(key_path: str, passphrase: Optional[str] = None):
     for key_class, key_type in key_types:
         try:
             return key_class.from_private_key_file(key_path, password=passphrase)
-        except:
+        except Exception:
             continue
 
     raise Exception(
