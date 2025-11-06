@@ -415,7 +415,7 @@ if __name__ == "__main__":
         work_pool_name="local-pool",
         # Executa diariamente às 4h da manhã
         cron="0 4 * * *",
-        tags=["salesforce", "sftp", "snowflake", "etl"],
+        tags=["salesforce", "sftp", "snowflake", "bronze", "dimension"],
         parameters={
             "sftp_base_path": "Import"
         },
