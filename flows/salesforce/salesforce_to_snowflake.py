@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from prefect import flow, task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
+from prefect.artifacts import create_table_artifact, create_markdown_artifact, create_link_artifact
 
 # Imports dos módulos de conexão
 import sys
@@ -314,7 +315,90 @@ def salesforce_to_snowflake(  # noqa: C901
         logger.info(f"⏱️ Duração: {duration:.1f}s")
         logger.info(f"{'=' * 80}\n")
 
-        # 7. Calcula duração e envia alerta de sucesso
+        # 7. ARTIFACTS: Visibilidade no Prefect UI
+        try:
+            # Artifact 1: Tabela de resumo por stream
+            table_data = []
+            for r in results:
+                status_text = {
+                    "success": "✓ Sucesso",
+                    "no_data": "⚠ Sem dados",
+                    "empty": "⚠ Vazio"
+                }.get(r["status"], "✗ Erro")
+
+                table_data.append({
+                    "Stream": r["stream_name"],
+                    "Status": status_text,
+                    "Registros": f"{r.get('rows_loaded', 0):,}",
+                    "Tamanho (MB)": f"{r.get('bytes_processed', 0) / (1024 * 1024):.2f}",
+                    "Tabela Snowflake": r.get("table_name", "N/A"),
+                    "Arquivo Fonte": r.get("source_file", "N/A")
+                })
+
+            create_table_artifact(
+                key="salesforce-stream-results",
+                table=table_data,
+                description=f"Processamento de {len(results)} streams do Salesforce"
+            )
+        except Exception as e:
+            logger.warning(f"Erro criando artifact de tabela: {e}")
+
+        # Artifact 2: Markdown com resumo executivo
+        try:
+            stream_details = "\n".join([
+                f"  - **{r['stream_name']}**: {r.get('rows_loaded', 0):,} registros ({r.get('bytes_processed', 0) / (1024 * 1024):.1f} MB)"
+                for r in results if r.get('status') == 'success'
+            ])
+
+            if not stream_details:
+                stream_details = "  - Nenhum stream processado com sucesso"
+
+            markdown_content = f"""# Salesforce SFTP → Snowflake
+
+## Resumo da Execução
+
+- **Início**: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}
+- **Duração**: {duration:.1f}s
+- **Performance**: {records_per_sec:,.0f} registros/seg
+
+## Streams Processados ({len(results)})
+
+{stream_details}
+
+### Totais
+- **Registros**: {total_rows:,}
+- **Volume**: {total_mb:.2f} MB
+
+## Database Snowflake
+- **Database**: `{snowflake_database}`
+- **Schema**: `{snowflake_schema}`
+- **Warehouse**: `{snowflake_warehouse}`
+- **Método**: PUT + COPY INTO (bulk load)
+"""
+
+            create_markdown_artifact(
+                key="salesforce-execution-summary",
+                markdown=markdown_content,
+                description="Resumo executivo da sincronização Salesforce"
+            )
+        except Exception as e:
+            logger.warning(f"Erro criando artifact de markdown: {e}")
+
+        # Artifact 3: Link para Snowflake
+        try:
+            if snowflake_account:
+                snowflake_url = f"https://app.snowflake.com/{snowflake_account}/"
+
+                create_link_artifact(
+                    key="salesforce-snowflake-console",
+                    link=snowflake_url,
+                    link_text="Abrir Snowflake Console",
+                    description=f"Tabelas carregadas em {snowflake_database}.{snowflake_schema}"
+                )
+        except Exception as e:
+            logger.warning(f"Erro criando artifact de link: {e}")
+
+        # 8. Calcula duração e envia alerta de sucesso
         duration = time.time() - start_time
 
         if send_alerts:
