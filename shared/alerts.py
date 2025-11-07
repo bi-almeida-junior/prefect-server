@@ -1,6 +1,5 @@
-"""Módulo de alertas compartilhado entre todos os flows"""
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 
@@ -192,7 +191,7 @@ def send_flow_error_alert(
         True se enviado com sucesso
     """
     # Formata data/hora
-    now = datetime.now()
+    now = datetime.now() - timedelta(hours=3)
     date_str = now.strftime("%d/%m/%Y às %H:%M")
 
     # Monta mensagem
