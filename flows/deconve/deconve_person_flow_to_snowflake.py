@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from prefect import flow, task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
+from prefect.artifacts import create_table_artifact, create_markdown_artifact, create_link_artifact
+from prefect.blocks.system import Secret
 
 # Imports dos módulos de conexão
 import sys
@@ -320,22 +322,42 @@ def deconve_person_flow_to_snowflake(
     logger.info("=" * 80)
 
     # 1. Carrega configurações
-    api_key = api_key or os.getenv("DECONVE_API_KEY")
+    # Carrega API Key do Deconve via Prefect Block (Secret)
+    if not api_key:
+        try:
+            logger.info("🔐 Carregando DECONVE_API_KEY do Prefect Block...")
+            api_key_block = Secret.load("deconve-api-key")
+            api_key = api_key_block.get()
+            logger.info("✅ API Key carregada do Block 'deconve-api-key'")
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao carregar Block 'deconve-api-key': {e}")
+            logger.info("Tentando carregar do .env como fallback...")
+            api_key = os.getenv("DECONVE_API_KEY")
 
-    # Snowflake
+    # Snowflake (mantém .env para estas variáveis por enquanto)
     snowflake_account = snowflake_account or os.getenv("SNOWFLAKE_ACCOUNT")
     snowflake_user = snowflake_user or os.getenv("SNOWFLAKE_USER")
     snowflake_private_key = snowflake_private_key or os.getenv("SNOWFLAKE_PRIVATE_KEY")
     snowflake_private_key_passphrase = snowflake_private_key_passphrase or os.getenv("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
     snowflake_warehouse = snowflake_warehouse or os.getenv("SNOWFLAKE_WAREHOUSE")
     snowflake_database = snowflake_database or os.getenv("SNOWFLAKE_DATABASE")
-    # Usa schema específico do Deconve (GOLD)
-    snowflake_schema = snowflake_schema or os.getenv("DECONVE_SNOWFLAKE_SCHEMA", "GOLD")
     snowflake_role = snowflake_role or os.getenv("SNOWFLAKE_ROLE")
+
+    # Carrega Schema específico do Deconve via Prefect Block (Secret)
+    if not snowflake_schema:
+        try:
+            logger.info("🔐 Carregando DECONVE_SNOWFLAKE_SCHEMA do Prefect Block...")
+            schema_block = Secret.load("deconve-snowflake-schema")
+            snowflake_schema = schema_block.get()
+            logger.info(f"✅ Schema carregado do Block 'deconve-snowflake-schema': {snowflake_schema}")
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao carregar Block 'deconve-snowflake-schema': {e}")
+            logger.info("Usando fallback: GOLD")
+            snowflake_schema = "GOLD"
 
     # Valida configurações
     if not api_key:
-        raise ValueError("Configure DECONVE_API_KEY no .env ou passe como parâmetro")
+        raise ValueError("Configure o Block 'deconve-api-key' na UI do Prefect ou DECONVE_API_KEY no .env")
 
     if not all([snowflake_account, snowflake_user, snowflake_private_key,
                 snowflake_warehouse, snowflake_database]):
@@ -473,7 +495,94 @@ def deconve_person_flow_to_snowflake(
             logger.info(f"⏱️ Duração: {duration:.1f}s")
             logger.info("=" * 80 + "\n")
 
-            # 14. Envia alerta de sucesso
+            # 14. ARTIFACTS: Visibilidade no Prefect UI
+            try:
+                # Artifact 1: Tabela de resumo
+                table_data = [{
+                    "Métrica": "Registros Extraídos",
+                    "Valor": f"{rows_written:,}"
+                }, {
+                    "Métrica": "Novos Inseridos",
+                    "Valor": f"{rows_inserted:,}"
+                }, {
+                    "Métrica": "Atualizados",
+                    "Valor": f"{rows_updated:,}"
+                }, {
+                    "Métrica": "Câmeras Processadas",
+                    "Valor": f"{cameras_processed:,}"
+                }, {
+                    "Métrica": "Período",
+                    "Valor": f"{days_back} dias retroativos"
+                }, {
+                    "Métrica": "Duração",
+                    "Valor": f"{duration:.1f}s"
+                }]
+
+                create_table_artifact(
+                    key="deconve-person-flow-metrics",
+                    table=table_data,
+                    description="Métricas da extração de person flow Deconve"
+                )
+            except Exception as e:
+                logger.warning(f"Erro criando artifact de tabela: {e}")
+
+            # Artifact 2: Markdown com resumo executivo
+            try:
+                markdown_content = f"""# Deconve API → Snowflake (Person Flow)
+
+## Resumo da Execução
+
+- **Registros extraídos**: {rows_written:,}
+- **Novos inseridos**: {rows_inserted:,}
+- **Atualizados**: {rows_updated:,}
+- **Câmeras processadas**: {cameras_processed}
+- **Duração**: {duration:.1f}s
+
+## Período Processado
+
+- **Início**: {start_date}
+- **Fim**: {end_date}
+- **Janela**: {days_back} dias retroativos
+- **Agrupamento**: {group_by}
+
+## Detalhes
+
+### Tabela Snowflake
+- **Database**: `{snowflake_database}`
+- **Schema**: `{snowflake_schema}` (GOLD layer)
+- **Tabela**: `{table_name}`
+- **Chave Primária**: {', '.join(primary_keys)}
+
+### Estratégia
+- **Método**: MERGE/UPSERT
+- **Tipo**: Tabela Fato
+- **Atualização**: Diária (7h) com janela retroativa
+- **Reprocessamento**: Seguro (sem duplicatas)
+"""
+
+                create_markdown_artifact(
+                    key="deconve-person-flow-summary",
+                    markdown=markdown_content,
+                    description="Resumo executivo do fluxo de pessoas"
+                )
+            except Exception as e:
+                logger.warning(f"Erro criando artifact de markdown: {e}")
+
+            # Artifact 3: Link para Snowflake
+            try:
+                if snowflake_account:
+                    snowflake_url = f"https://app.snowflake.com/{snowflake_account}/"
+
+                    create_link_artifact(
+                        key="deconve-person-flow-snowflake",
+                        link=snowflake_url,
+                        link_text="Abrir Snowflake Console",
+                        description=f"Tabela: {snowflake_database}.{snowflake_schema}.{table_name}"
+                    )
+            except Exception as e:
+                logger.warning(f"Erro criando artifact de link: {e}")
+
+            # 15. Envia alerta de sucesso
             if send_alerts:
                 try:
                     from prefect.context import get_run_context
