@@ -102,7 +102,7 @@ def create_table_if_not_exists(
         conn,
         table_name: str,
         columns_schema: Dict[str, str],
-        primary_key: Optional[str] = None
+        primary_key: Optional[Any] = None
 ):
     """
     Cria tabela no Snowflake se não existir
@@ -111,9 +111,15 @@ def create_table_if_not_exists(
         conn: Conexão Snowflake
         table_name: Nome da tabela (ex: BRZ_SALESFORCE_SUBSCRIBER)
         columns_schema: Dicionário {nome_coluna: tipo_dados}
-        primary_key: Nome da coluna chave primária (opcional)
+        primary_key: Chave primária (string para chave simples ou lista para chave composta)
 
     Example:
+        # Chave simples
+        primary_key = "subscriber_id"
+
+        # Chave composta
+        primary_key = ["id_camera", "dt_fluxo"]
+
         columns_schema = {
             "subscriber_id": "VARCHAR(255)",
             "date_joined": "VARCHAR(255)",
@@ -135,7 +141,14 @@ def create_table_if_not_exists(
         columns_ddl = ", ".join([f'"{col}" {dtype}' for col, dtype in columns_schema.items()])
 
         if primary_key:
-            columns_ddl += f', PRIMARY KEY ("{primary_key}")'
+            # Trata chave primária: pode ser string ou lista (chave composta)
+            if isinstance(primary_key, list):
+                # Chave composta: múltiplas colunas
+                pk_columns = ", ".join([f'"{pk}"' for pk in primary_key])
+                columns_ddl += f', PRIMARY KEY ({pk_columns})'
+            else:
+                # Chave simples: uma coluna
+                columns_ddl += f', PRIMARY KEY ("{primary_key}")'
 
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {full_table_name} (
@@ -377,3 +390,182 @@ SALESFORCE_TABLES_SCHEMAS = {
         }
     }
 }
+
+
+# Schemas das tabelas Deconve (GOLD layer)
+DECONVE_TABLES_SCHEMAS = {
+    "camera": {
+        "table_name": "DECONVE_DIM_CAMERA",
+        "primary_key": ["ID_UNIT", "ID_CAMERA"],
+        "columns": {
+            "ID_CAMERA": "VARCHAR(255)",
+            "DS_CAMERA": "VARCHAR(500)",
+            "ID_UNIT": "VARCHAR(255)",
+            "ID_SHOPPING": "INTEGER",
+            "DS_SIGLA": "VARCHAR(10)",
+            "DS_SHOPPING": "VARCHAR(255)",
+            "DT_CRIACAO": "TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()"
+        }
+    },
+    "person_flow": {
+        "table_name": "DECONVE_FATO_FLUXO_PESSOA",
+        "primary_key": ["ID_CAMERA", "DT_FLUXO"],
+        "columns": {
+            "ID_CAMERA": "VARCHAR(255)",
+            "DT_FLUXO": "TIMESTAMP_NTZ",
+            "NR_ENTRADA": "INTEGER",
+            "NR_SAIDA": "INTEGER",
+            "DT_CRIACAO": "TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()"
+        }
+    }
+}
+
+
+@task(cache_policy=NO_CACHE)
+def merge_csv_to_snowflake(
+        conn,
+        table_name: str,
+        csv_file_path: str,
+        primary_keys: List[str],
+        csv_encoding: str = 'utf-8',
+        columns: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Carrega CSV no Snowflake usando MERGE (UPSERT) para evitar duplicatas
+
+    Estratégia:
+    1. Cria tabela staging temporária
+    2. Carrega CSV na staging (PUT + COPY INTO)
+    3. Faz MERGE da staging para a tabela final usando primary_keys
+    4. Remove staging
+
+    Args:
+        conn: Conexão Snowflake
+        table_name: Nome da tabela de destino
+        csv_file_path: Caminho do arquivo CSV local
+        primary_keys: Lista de colunas que formam a chave primária (pode ser composta)
+        csv_encoding: Encoding do CSV (utf-8, utf-16, etc.)
+        columns: Lista de colunas (opcional, lê do CSV se não fornecido)
+
+    Returns:
+        Dict com estatísticas (rows_inserted, rows_updated)
+    """
+    logger = get_run_logger()
+    import os
+    import csv as csv_module
+    import time
+
+    try:
+        if not os.path.exists(csv_file_path):
+            raise FileNotFoundError(f"Arquivo não encontrado: {csv_file_path}")
+
+        file_size_mb = os.path.getsize(csv_file_path) / (1024 * 1024)
+        logger.info(f"🚀 Carregando CSV ({file_size_mb:.2f} MB) em {table_name} usando MERGE (UPSERT)...")
+
+        cursor = conn.cursor()
+
+        # 1. Lê colunas do CSV se não fornecidas
+        if not columns:
+            with open(csv_file_path, 'r', encoding=csv_encoding) as f:
+                reader = csv_module.reader(f)
+                columns = next(reader)
+            logger.info(f"📋 {len(columns)} colunas detectadas no CSV")
+
+        # 2. Cria tabela staging temporária (clone da estrutura da tabela principal)
+        staging_table = f"{table_name}_STAGING_{int(time.time())}"
+        logger.info(f"🏗️ Criando tabela staging: {staging_table}")
+
+        create_staging_sql = f"CREATE TEMPORARY TABLE {staging_table} LIKE {table_name}"
+        cursor.execute(create_staging_sql)
+        logger.info(f"✅ Tabela staging criada")
+
+        # 3. PUT arquivo no stage da tabela staging
+        stage_name = f"@%{staging_table}"
+        file_name = os.path.basename(csv_file_path)
+
+        logger.info(f"⬆️ Enviando CSV para stage staging {stage_name}...")
+        put_path = csv_file_path.replace('\\', '/')
+        put_sql = f"PUT 'file://{put_path}' {stage_name} AUTO_COMPRESS=TRUE OVERWRITE=TRUE"
+        cursor.execute(put_sql)
+        logger.info("✅ Arquivo enviado para stage")
+
+        # 4. COPY INTO staging
+        logger.info("⚡ Carregando dados na staging...")
+
+        quoted_columns = [f'"{col}"' for col in columns]
+        encoding_param = "UTF16" if "utf-16" in csv_encoding.lower() else "UTF8"
+
+        copy_sql = f"""
+        COPY INTO {staging_table} ({', '.join(quoted_columns)})
+        FROM {stage_name}/{file_name}.gz
+        FILE_FORMAT = (
+            TYPE = 'CSV'
+            FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+            SKIP_HEADER = 1
+            ENCODING = '{encoding_param}'
+            FIELD_DELIMITER = ','
+            TRIM_SPACE = TRUE
+            ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE
+        )
+        ON_ERROR = 'CONTINUE'
+        """
+
+        cursor.execute(copy_sql)
+        copy_result = cursor.fetchone()
+        rows_loaded = copy_result[1] if copy_result else 0
+
+        logger.info(f"✅ {rows_loaded} linhas carregadas na staging")
+
+        # 5. Monta condição de MATCH usando as chaves primárias
+        match_conditions = " AND ".join([f'target."{pk}" = source."{pk}"' for pk in primary_keys])
+
+        # 6. Monta UPDATE SET (todas as colunas exceto as chaves primárias)
+        update_columns = [col for col in columns if col not in primary_keys]
+        update_set = ", ".join([f'target."{col}" = source."{col}"' for col in update_columns])
+
+        # 7. Monta INSERT (todas as colunas)
+        insert_columns = ", ".join([f'"{col}"' for col in columns])
+        insert_values = ", ".join([f'source."{col}"' for col in columns])
+
+        # 8. Executa MERGE
+        logger.info("🔄 Executando MERGE (UPSERT)...")
+
+        merge_sql = f"""
+        MERGE INTO {table_name} AS target
+        USING {staging_table} AS source
+        ON {match_conditions}
+        WHEN MATCHED THEN
+            UPDATE SET {update_set}
+        WHEN NOT MATCHED THEN
+            INSERT ({insert_columns})
+            VALUES ({insert_values})
+        """
+
+        cursor.execute(merge_sql)
+        merge_result = cursor.fetchone()
+
+        rows_inserted = merge_result[0] if merge_result else 0
+        rows_updated = merge_result[1] if merge_result else 0
+
+        logger.info(f"✅ MERGE concluído:")
+        logger.info(f"   📝 Inseridos: {rows_inserted}")
+        logger.info(f"   🔄 Atualizados: {rows_updated}")
+
+        # 9. Remove staging (o stage interno é automaticamente removido junto)
+        cursor.execute(f"DROP TABLE {staging_table}")
+        logger.info(f"🗑️ Staging removida")
+
+        # Nota: Não precisa fazer REMOVE do stage pois tabelas TEMPORARY
+        # limpam automaticamente seus stages internos ao serem dropadas
+
+        cursor.close()
+
+        return {
+            "rows_inserted": rows_inserted,
+            "rows_updated": rows_updated,
+            "total_rows_processed": rows_loaded
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao fazer MERGE: {str(e)}")
+        raise
