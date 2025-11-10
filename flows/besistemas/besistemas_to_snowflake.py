@@ -609,13 +609,13 @@ def besistemas_to_snowflake(
         succ = [k for k, v in results.items() if v['status'] == 'success']
         fail = [k for k, v in results.items() if v['status'] == 'failed']
 
-        logger.info(f"✓ Categorias com sucesso: {len(succ)}")
+        logger.info(f"✅ Categorias com sucesso: {len(succ)}")
         total_rows = sum(results[k]['rows'] for k in succ)
         for k in sorted(succ):
             logger.info(f"  • {k}: TODO={results[k]['todo']} | Linhas={results[k]['rows']:,}")
 
         if fail:
-            logger.info(f"✗ Categorias com falha: {len(fail)}")
+            logger.info(f"❌ Categorias com falha: {len(fail)}")
             for k in fail:
                 logger.info(f"  • {k}: TODO={results[k]['todo']} | Erro={results[k]['error'][:120]}")
 
@@ -629,11 +629,11 @@ def besistemas_to_snowflake(
 
                 if r['status'] == 'success':
                     rows = r.get('rows', 0)
-                    status = "✓ Sucesso" if rows > 0 else "⚠ Vazio"
+                    status = "✅ Sucesso" if rows > 0 else "⚠️ Vazio"
                     linhas = f"{rows:,}"
                     erro = "-"
                 else:
-                    status = "✗ Falha"
+                    status = "❌ Falha"
                     linhas = "N/A"
                     erro = r.get('error', 'Erro desconhecido')[:100]
 
@@ -646,7 +646,7 @@ def besistemas_to_snowflake(
                     "Tabela": f"BRZ_BESISTEMAS_{category.upper().replace('-', '_')}" if r['status'] == 'success' else "N/A"
                 })
 
-            artifact_desc = f"✓ {len(succ)} sucesso | ✗ {len(fail)} falhas | Total: {len(results)}"
+            artifact_desc = f"✅ {len(succ)} sucesso | ❌ {len(fail)} falhas | Total: {len(results)}"
             create_table_artifact(
                 key="besistemas-category-results",
                 table=table_data,
