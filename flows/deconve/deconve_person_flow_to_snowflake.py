@@ -498,7 +498,12 @@ def deconve_person_flow_to_snowflake(
             # 14. ARTIFACTS: Visibilidade no Prefect UI
             try:
                 # Tabela de resumo
+                status_icon = "✅" if rows_written > 0 else "⚠️"
+
                 table_data = [{
+                    "Métrica": "Status",
+                    "Valor": f"{status_icon} {'Sucesso' if rows_written > 0 else 'Sem dados'}"
+                }, {
                     "Métrica": "Registros Extraídos",
                     "Valor": f"{rows_written:,}"
                 }, {
@@ -516,12 +521,16 @@ def deconve_person_flow_to_snowflake(
                 }, {
                     "Métrica": "Duração",
                     "Valor": f"{duration:.1f}s"
+                }, {
+                    "Métrica": "Tabela Snowflake",
+                    "Valor": f"{snowflake_database}.{snowflake_schema}.{table_name}"
                 }]
 
+                artifact_desc = f"Person Flow: {rows_written:,} registros | {cameras_processed} câmeras"
                 create_table_artifact(
                     key="deconve-person-flow-metrics",
                     table=table_data,
-                    description="Métricas da extração de person flow Deconve"
+                    description=artifact_desc
                 )
             except Exception as e:
                 logger.warning(f"Erro criando artifact de tabela: {e}")

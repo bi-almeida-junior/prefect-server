@@ -155,7 +155,7 @@ def process_units_and_cameras(
                             video_details = get_video_details.fn(access_token, camera_id)
                             camera_name = video_details.get('name', '')
                         except Exception as video_error:
-                            logger.warning(f"  ⚠️ Erro ao buscar nome da câmera {camera_id}: {str(video_error)}")
+                            logger.warning(f"⚠️ Erro ao buscar nome da câmera {camera_id}: {str(video_error)}")
                             # Continua mesmo se não conseguir buscar o nome
 
                         writer.writerow({
