@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from prefect import flow, task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
-from prefect.artifacts import create_table_artifact, create_markdown_artifact, create_link_artifact
+from prefect.artifacts import create_table_artifact
 from prefect.blocks.system import Secret
 
 # Imports dos módulos de conexão
@@ -497,7 +497,7 @@ def deconve_person_flow_to_snowflake(
 
             # 14. ARTIFACTS: Visibilidade no Prefect UI
             try:
-                # Artifact 1: Tabela de resumo
+                # Tabela de resumo
                 table_data = [{
                     "Métrica": "Registros Extraídos",
                     "Valor": f"{rows_written:,}"
@@ -525,62 +525,6 @@ def deconve_person_flow_to_snowflake(
                 )
             except Exception as e:
                 logger.warning(f"Erro criando artifact de tabela: {e}")
-
-            # Artifact 2: Markdown com resumo executivo
-            try:
-                markdown_content = f"""# Deconve API → Snowflake (Person Flow)
-
-## Resumo da Execução
-
-- **Registros extraídos**: {rows_written:,}
-- **Novos inseridos**: {rows_inserted:,}
-- **Atualizados**: {rows_updated:,}
-- **Câmeras processadas**: {cameras_processed}
-- **Duração**: {duration:.1f}s
-
-## Período Processado
-
-- **Início**: {start_date}
-- **Fim**: {end_date}
-- **Janela**: {days_back} dias retroativos
-- **Agrupamento**: {group_by}
-
-## Detalhes
-
-### Tabela Snowflake
-- **Database**: `{snowflake_database}`
-- **Schema**: `{snowflake_schema}` (GOLD layer)
-- **Tabela**: `{table_name}`
-- **Chave Primária**: {', '.join(primary_keys)}
-
-### Estratégia
-- **Método**: MERGE/UPSERT
-- **Tipo**: Tabela Fato
-- **Atualização**: Diária (7h) com janela retroativa
-- **Reprocessamento**: Seguro (sem duplicatas)
-"""
-
-                create_markdown_artifact(
-                    key="deconve-person-flow-summary",
-                    markdown=markdown_content,
-                    description="Resumo executivo do fluxo de pessoas"
-                )
-            except Exception as e:
-                logger.warning(f"Erro criando artifact de markdown: {e}")
-
-            # Artifact 3: Link para Snowflake
-            try:
-                if snowflake_account:
-                    snowflake_url = f"https://app.snowflake.com/{snowflake_account}/"
-
-                    create_link_artifact(
-                        key="deconve-person-flow-snowflake",
-                        link=snowflake_url,
-                        link_text="Abrir Snowflake Console",
-                        description=f"Tabela: {snowflake_database}.{snowflake_schema}.{table_name}"
-                    )
-            except Exception as e:
-                logger.warning(f"Erro criando artifact de link: {e}")
 
             # 15. Envia alerta de sucesso
             if send_alerts:
