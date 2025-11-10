@@ -10,7 +10,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
 from prefect.cache_policies import NONE
-from prefect.artifacts import create_table_artifact, create_markdown_artifact, create_link_artifact
+from prefect.artifacts import create_table_artifact
 
 # Imports das conexões compartilhadas
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
@@ -620,7 +620,7 @@ def besistemas_to_snowflake(
 
         # ====== ARTIFACTS: Visibilidade no Prefect UI ======
 
-        # Artifact 1: Tabela de resumo por categoria
+        # Tabela de resumo por categoria
         try:
             table_data = []
             for category in sorted(results.keys()):
@@ -640,67 +640,6 @@ def besistemas_to_snowflake(
             )
         except Exception as e:
             logger.warning(f"Erro criando artifact de tabela: {e}")
-
-        # Artifact 2: Markdown com resumo executivo
-        try:
-            success_details = "\n".join([
-                f"  - **{k}**: {results[k]['rows']:,} linhas ({results[k]['todo']} arquivos)"
-                for k in sorted(succ)
-            ]) if succ else "  - Nenhuma categoria processada com sucesso"
-
-            failure_details = "\n".join([
-                f"  - **{k}**: {results[k]['error'][:100]}..."
-                for k in sorted(fail)
-            ]) if fail else ""
-
-            markdown_content = f"""# Besistemas S3 → Snowflake
-
-## Resumo da Execução
-
-- **Início**: {start_time.strftime('%Y-%m-%d %H:%M:%S')}
-- **Fim**: {end_time.strftime('%Y-%m-%d %H:%M:%S')}
-- **Duração**: {int(h)}h {int(m)}m {int(s)}s
-- **Modo**: {'CREATE OR REPLACE' if CREATE_OR_REPLACE else 'APPEND'}
-- **Janela**: {window_days} dias
-
-## Resultados
-
-### Sucesso ({len(succ)}/{len(results)})
-{success_details}
-
-**Total de Linhas Carregadas**: {total_rows:,}
-
-### Database Snowflake
-- **Database**: `{snowflake_database}`
-- **Schema**: `{snowflake_schema}`
-- **Warehouse**: `{snowflake_warehouse}`
-"""
-
-            if failure_details:
-                markdown_content += f"\n### Falhas ({len(fail)})\n{failure_details}\n"
-
-            create_markdown_artifact(
-                key="besistemas-execution-summary",
-                markdown=markdown_content,
-                description="Resumo executivo da execução"
-            )
-        except Exception as e:
-            logger.warning(f"Erro criando artifact de markdown: {e}")
-
-        # Artifact 3: Link para o manifesto no Snowflake
-        try:
-            if snowflake_account and snowflake_database and snowflake_schema:
-                # URL do Snowflake (ajuste conforme seu ambiente)
-                snowflake_url = f"https://app.snowflake.com/{snowflake_account}/"
-
-                create_link_artifact(
-                    key="besistemas-snowflake-manifest",
-                    link=snowflake_url,
-                    link_text="Abrir Snowflake Console",
-                    description=f"Tabela de manifesto: {snowflake_database}.{snowflake_schema}.BESISTEMAS_ARQUIVOS_COLETADOS"
-                )
-        except Exception as e:
-            logger.warning(f"Erro criando artifact de link: {e}")
 
         # Envia alerta de sucesso
         try:
