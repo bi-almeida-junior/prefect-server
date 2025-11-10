@@ -213,6 +213,7 @@ def create_table_if_not_exists(conn, database, schema, table_name, sample_df):
 def load_chunk_to_snowflake(conn, database, schema, table_name, df) -> int:
     """Carrega um chunk via PUT + COPY."""
     cursor = conn.cursor()
+    temp_file_path = None
     try:
         df.columns = [c.upper().replace(' ', '_').replace('-', '_').replace('.', '_') for c in df.columns]
 
@@ -224,11 +225,11 @@ def load_chunk_to_snowflake(conn, database, schema, table_name, df) -> int:
         csv_buffer.seek(0)
         csv_content = csv_buffer.getvalue()
 
-        temp_base = r"C:\Temp"
-        if not os.path.exists(temp_base):
-            os.makedirs(temp_base)
+        # Usa diretório temporário do sistema (Linux: /tmp, Windows: C:\Temp)
+        import tempfile
+        temp_dir = tempfile.gettempdir()
 
-        temp_file_path = os.path.join(temp_base, f"snowflake_{table_name}_chunk.csv")
+        temp_file_path = os.path.join(temp_dir, f"snowflake_{table_name}_chunk.csv")
         with open(temp_file_path, 'w', encoding='utf-8', newline='') as f:
             f.write(csv_content)
 
@@ -625,23 +626,58 @@ def besistemas_to_snowflake(
             table_data = []
             for category in sorted(results.keys()):
                 r = results[category]
+
+                if r['status'] == 'success':
+                    rows = r.get('rows', 0)
+                    status = "✓ Sucesso" if rows > 0 else "⚠ Vazio"
+                    linhas = f"{rows:,}"
+                    erro = "-"
+                else:
+                    status = "✗ Falha"
+                    linhas = "N/A"
+                    erro = r.get('error', 'Erro desconhecido')[:100]
+
                 table_data.append({
                     "Categoria": category,
-                    "Status": "✓ Sucesso" if r['status'] == 'success' else "✗ Falha",
-                    "Arquivos Processados": r['todo'],
-                    "Linhas Carregadas": f"{r.get('rows', 0):,}" if r['status'] == 'success' else "N/A",
-                    "Tabela Snowflake": f"BRZ_BESISTEMAS_{category.upper().replace('-', '_')}" if r['status'] == 'success' else "N/A"
+                    "Status": status,
+                    "Arquivos": r['todo'],
+                    "Linhas": linhas,
+                    "Erro": erro,
+                    "Tabela": f"BRZ_BESISTEMAS_{category.upper().replace('-', '_')}" if r['status'] == 'success' else "N/A"
                 })
 
+            artifact_desc = f"✓ {len(succ)} sucesso | ✗ {len(fail)} falhas | Total: {len(results)}"
             create_table_artifact(
                 key="besistemas-category-results",
                 table=table_data,
-                description=f"Resumo do processamento de {len(results)} categorias"
+                description=artifact_desc
             )
         except Exception as e:
             logger.warning(f"Erro criando artifact de tabela: {e}")
 
-        # Envia alerta de sucesso
+        # Se houver falhas, envia alerta de erro e levanta exceção
+        if fail:
+            logger.error(f"❌ Flow com falhas: {len(fail)}/{len(results)} categorias falharam")
+
+            try:
+                send_flow_error_alert(
+                    flow_name="Besistemas",
+                    source="S3",
+                    destination="Snowflake",
+                    error_message=f"{len(fail)} categorias falharam: {', '.join(fail[:5])}",
+                    duration_seconds=elapsed.total_seconds(),
+                    partial_summary={
+                        "records_loaded": total_rows,
+                        "categories_success": len(succ),
+                        "categories_failed": len(fail)
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Falha ao enviar alerta de erro: {e}")
+
+            raise Exception(f"Flow falhou: {len(fail)} de {len(results)} categorias falharam")
+
+        # Se tudo OK, envia alerta de sucesso
         try:
             send_flow_success_alert(
                 flow_name="Besistemas",
