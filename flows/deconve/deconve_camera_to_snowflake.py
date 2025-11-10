@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from prefect import flow, task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
-from prefect.artifacts import create_table_artifact, create_markdown_artifact, create_link_artifact
+from prefect.artifacts import create_table_artifact
 from prefect.blocks.system import Secret
 
 # Imports dos módulos de conexão
@@ -406,8 +406,13 @@ def deconve_camera_to_snowflake(
 
             # 12. ARTIFACTS: Visibilidade no Prefect UI
             try:
-                # Artifact 1: Tabela de resumo
+                # Tabela de resumo
+                status_icon = "✅" if rows_written > 0 else "⚠️"
+
                 table_data = [{
+                    "Métrica": "Status",
+                    "Valor": f"{status_icon} {'Sucesso' if rows_written > 0 else 'Sem dados'}"
+                }, {
                     "Métrica": "Câmeras Extraídas",
                     "Valor": f"{rows_written:,}"
                 }, {
@@ -422,63 +427,19 @@ def deconve_camera_to_snowflake(
                 }, {
                     "Métrica": "Duração",
                     "Valor": f"{duration:.1f}s"
+                }, {
+                    "Métrica": "Tabela Snowflake",
+                    "Valor": f"{snowflake_database}.{snowflake_schema}.{table_name}"
                 }]
 
+                artifact_desc = f"Câmeras: {rows_written:,} extraídas | {units_processed} unidades"
                 create_table_artifact(
                     key="deconve-camera-metrics",
                     table=table_data,
-                    description="Métricas da extração de câmeras Deconve"
+                    description=artifact_desc
                 )
             except Exception as e:
                 logger.warning(f"Erro criando artifact de tabela: {e}")
-
-            # Artifact 2: Markdown com resumo executivo
-            try:
-                markdown_content = f"""# Deconve API → Snowflake (Câmeras)
-
-## Resumo da Execução
-
-- **Câmeras extraídas**: {rows_written:,}
-- **Novas câmeras inseridas**: {rows_inserted:,}
-- **Câmeras atualizadas**: {rows_updated:,}
-- **Unidades processadas**: {units_processed}
-- **Duração**: {duration:.1f}s
-
-## Detalhes
-
-### Tabela Snowflake
-- **Database**: `{snowflake_database}`
-- **Schema**: `{snowflake_schema}` (GOLD layer)
-- **Tabela**: `{table_name}`
-- **Chave Primária**: {', '.join(primary_keys)}
-
-### Estratégia
-- **Método**: MERGE/UPSERT
-- **Tipo**: Dimensão (SCD Type 1)
-- **Atualização**: Diária (6h)
-"""
-
-                create_markdown_artifact(
-                    key="deconve-camera-summary",
-                    markdown=markdown_content,
-                    description="Resumo executivo da dimensão de câmeras"
-                )
-            except Exception as e:
-                logger.warning(f"Erro criando artifact de markdown: {e}")
-
-            # Artifact 3: Link para Snowflake
-            try:
-                if snowflake_account:
-                    snowflake_url = f"https://app.snowflake.com/{snowflake_account}/"
-
-                    create_link_artifact(
-                        key="deconve-camera-snowflake",
-                        link=snowflake_url,
-                        link_text="Abrir Snowflake Console",
-                        description=f"Tabela: {snowflake_database}.{snowflake_schema}.{table_name}"
-                    )
-            except Exception as e:
-                logger.warning(f"Erro criando artifact de link: {e}")
 
             # 13. Envia alerta de sucesso
             if send_alerts:
