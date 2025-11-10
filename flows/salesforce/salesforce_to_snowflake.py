@@ -321,10 +321,10 @@ def salesforce_to_snowflake(  # noqa: C901
             table_data = []
             for r in results:
                 status_text = {
-                    "success": "✓ Sucesso",
-                    "no_data": "⚠ Sem dados",
-                    "empty": "⚠ Vazio"
-                }.get(r["status"], "✗ Erro")
+                    "success": "✅ Sucesso",
+                    "no_data": "⚠️ Sem dados",
+                    "empty": "⚠️ Vazio"
+                }.get(r["status"], "❌ Erro")
 
                 table_data.append({
                     "Stream": r["stream_name"],
