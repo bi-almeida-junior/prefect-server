@@ -25,21 +25,21 @@ from shared.alerts import (  # noqa: E402
 load_dotenv()
 
 # ════════════════════════════════════════════════════════════════════════════════
-# BLOCKS DO PREFECT - Usando Blocks Nativos (Secret e String)
+# BLOCKS DO PREFECT - Usando APENAS Secret
 # ════════════════════════════════════════════════════════════════════════════════
 #
 # Configure os seguintes blocks via interface do Prefect ou via código:
 #
-# PostgreSQL Credentials (Secrets):
-#   - zapt-tech-postgres-host       (String)
-#   - zapt-tech-postgres-port       (String)
-#   - zapt-tech-postgres-database   (String)
-#   - zapt-tech-postgres-user       (String)
+# PostgreSQL Credentials (TODOS Secret):
+#   - zapt-tech-postgres-host       (Secret)
+#   - zapt-tech-postgres-port       (Secret)
+#   - zapt-tech-postgres-database   (Secret)
+#   - zapt-tech-postgres-user       (Secret)
 #   - zapt-tech-postgres-password   (Secret)
-#   - zapt-tech-postgres-schema     (String)
+#   - zapt-tech-postgres-schema     (Secret)
 #
 # API Blocks:
-#   - zapt-tech-api-url             (String)
+#   - zapt-tech-api-url             (Secret)
 #   - zapt-tech-api-key             (Secret)
 #
 # ════════════════════════════════════════════════════════════════════════════════
@@ -587,18 +587,18 @@ def execute_query_from_postgres(
     logger = get_run_logger()
 
     try:
-        # Carrega credenciais usando blocks nativos do Prefect
-        from prefect.blocks.system import String, Secret
+        # Carrega credenciais usando APENAS Secret
+        from prefect.blocks.system import Secret
 
-        logger.info(f"📦 Carregando credenciais PostgreSQL via blocks nativos...")
+        logger.info(f"📦 Carregando credenciais PostgreSQL via Secret blocks...")
 
-        # Carrega credenciais individuais
-        host = String.load("zapt-tech-postgres-host").value
-        port = int(String.load("zapt-tech-postgres-port").value)
-        database = String.load("zapt-tech-postgres-database").value
-        user = String.load("zapt-tech-postgres-user").value
+        # Carrega credenciais individuais (TODOS Secret)
+        host = Secret.load("zapt-tech-postgres-host").get()
+        port = int(Secret.load("zapt-tech-postgres-port").get())
+        database = Secret.load("zapt-tech-postgres-database").get()
+        user = Secret.load("zapt-tech-postgres-user").get()
         password = Secret.load("zapt-tech-postgres-password").get()
-        schema = String.load("zapt-tech-postgres-schema").value
+        schema = Secret.load("zapt-tech-postgres-schema").get()
 
         logger.info(f"✅ Credenciais carregadas: {host}:{port}/{database}")
         logger.info(f"🏬 Shopping: {sigla_shopping}")
@@ -738,13 +738,13 @@ def send_results_to_api(
     logger = get_run_logger()
 
     try:
-        # Carrega blocks usando blocks nativos do Prefect
-        from prefect.blocks.system import String, Secret
+        # Carrega blocks usando APENAS Secret
+        from prefect.blocks.system import Secret
 
         logger.info(f"📦 Carregando blocks da API...")
 
-        # Carrega URL da API
-        api_url = String.load(api_url_block).value
+        # Carrega URL da API (Secret)
+        api_url = Secret.load(api_url_block).get()
         logger.info(f"🌐 API URL: {api_url}")
 
         # Carrega API Key (opcional)
