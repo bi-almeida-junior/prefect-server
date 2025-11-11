@@ -10,6 +10,7 @@ from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
 from prefect.artifacts import create_table_artifact
 from prefect.blocks.system import Secret
+from prefect.client.schemas.schedules import CronSchedule
 
 # Imports dos módulos de conexão
 import sys
@@ -519,8 +520,9 @@ if __name__ == "__main__":
     ).deploy(
         name="deconve-camera-to-snowflake",
         work_pool_name="local-pool",
-        # Executa diariamente às 6h da manhã
-        cron="0 6 * * *",
+        schedules=[
+            CronSchedule(cron="1 0 * * *", timezone="America/Sao_Paulo")
+        ],
         tags=["deconve", "api", "snowflake", "gold", "dimension"],
         description="Pipeline: Deconve API -> Snowflake - Dimensão de Câmeras (DECONVE_CAMERA) | Extrai metadados cadastrais de câmeras instaladas",
         version="1.0.0"
