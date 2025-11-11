@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
 from prefect.cache_policies import NONE
 from prefect.artifacts import create_table_artifact
+from prefect.client.schemas.schedules import CronSchedule
 
 # Imports das conexões compartilhadas
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
@@ -724,7 +725,9 @@ if __name__ == "__main__":
     ).deploy(
         name="besistemas-s3-to-snowflake",
         work_pool_name="local-pool",
-        cron="0 3 * * *",  # Diário às 3h
+        schedules=[
+            CronSchedule(cron="20 09 * * *", timezone="America/Sao_Paulo")
+        ],
         tags=["besistemas", "s3", "snowflake", "bronze", "incremental"],
         parameters={},
         description="Pipeline: Besistemas S3 -> Snowflake",
