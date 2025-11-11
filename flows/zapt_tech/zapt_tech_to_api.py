@@ -140,8 +140,7 @@ ZAPT_TECH_SCHEMA = {
 #
 # ════════════════════════════════════════════════════════════════════════════════
 
-DEFAULT_SQL_QUERY = """
--- ============================================================================
+DEFAULT_SQL_QUERY = """-- ============================================================================
 -- CTE: COMPETENCIA - Calcula período de análise (últimos 12 meses)
 -- ============================================================================
 with competencia as (
@@ -720,7 +719,7 @@ def save_results_to_json(
 
 ---
 
-## 📋 JSON Completo (Selecione tudo com Ctrl+A e copie)
+## 📋 JSON Completo
 
 ```json
 {full_json}
@@ -728,7 +727,7 @@ def save_results_to_json(
 """
 
             create_markdown_artifact(
-                key="zapt-tech-json-data",  # 👈 SEMPRE O MESMO NOME
+                key="zapt-tech-json-data",
                 markdown=markdown_content,
                 description=f"JSON Completo - {items_count:,} registros"
             )
