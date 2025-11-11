@@ -704,6 +704,44 @@ def save_results_to_json(
 
         logger.info(f"   📌 Cópia salva: {latest_filepath}")
 
+        # Cria artifact com JSON completo (sempre o mesmo nome = sobrescreve)
+        try:
+            from prefect.artifacts import create_markdown_artifact
+
+            # JSON completo formatado
+            full_json = json.dumps(payload, indent=2, ensure_ascii=False)
+
+            markdown_content = f"""
+# 📊 Zapt Tech - JSON Consolidado
+
+**Total de registros:** {items_count:,}
+**Tamanho:** {file_size_mb:.2f} MB
+**Shopping:** {sigla_shopping}
+
+---
+
+## 📥 JSON Completo
+
+```json
+{full_json}
+```
+
+---
+
+**Arquivo salvo em:** `{filepath}`
+"""
+
+            create_markdown_artifact(
+                key="zapt-tech-json-data",  # 👈 SEMPRE O MESMO NOME = SOBRESCREVE
+                markdown=markdown_content,
+                description=f"JSON Zapt Tech - {items_count:,} registros"
+            )
+
+            logger.info("✅ Artifact criado: zapt-tech-json-data")
+
+        except Exception as artifact_error:
+            logger.warning(f"⚠️ Erro ao criar artifact: {artifact_error}")
+
         return {
             "status": "saved",
             "filepath": filepath,
