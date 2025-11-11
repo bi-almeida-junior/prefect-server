@@ -726,7 +726,7 @@ if __name__ == "__main__":
         name="besistemas-s3-to-snowflake",
         work_pool_name="local-pool",
         schedules=[
-            CronSchedule(cron="0 06 * * *", timezone="America/Sao_Paulo")
+            CronSchedule(cron="0 6 * * *", timezone="America/Sao_Paulo")
         ],
         tags=["besistemas", "s3", "snowflake", "bronze", "incremental"],
         parameters={},
