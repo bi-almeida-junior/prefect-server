@@ -7,6 +7,7 @@ from prefect import flow, task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
 from prefect.artifacts import create_table_artifact
+from prefect.client.schemas.schedules import CronSchedule
 
 # Imports dos módulos de conexão
 import sys
@@ -442,8 +443,9 @@ if __name__ == "__main__":
     ).deploy(
         name="salesforce-sftp-to-snowflake",
         work_pool_name="local-pool",
-        # Executa diariamente às 4h da manhã
-        cron="0 4 * * *",
+        schedules=[
+            CronSchedule(cron="10 6 * * *", timezone="America/Sao_Paulo")
+        ],
         tags=["salesforce", "sftp", "snowflake", "bronze", "dimension"],
         parameters={
             "sftp_base_path": "Import"
