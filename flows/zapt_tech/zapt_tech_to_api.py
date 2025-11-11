@@ -704,43 +704,65 @@ def save_results_to_json(
 
         logger.info(f"   📌 Cópia salva: {latest_filepath}")
 
-        # Cria artifact com JSON completo (sempre o mesmo nome = sobrescreve)
+        # Cria artifact com link de download (sempre o mesmo nome = sobrescreve)
         try:
-            from prefect.artifacts import create_markdown_artifact
+            import pathlib
+            from prefect.artifacts import create_link_artifact, create_markdown_artifact
 
-            # JSON completo formatado
-            full_json = json.dumps(payload, indent=2, ensure_ascii=False)
+            # Caminho absoluto
+            abs_filepath = pathlib.Path(latest_filepath).absolute()
 
+            # Link file:// para download direto
+            file_url = f"file:///{abs_filepath.as_posix()}"
+
+            # Cria link artifact para download
+            create_link_artifact(
+                key="zapt-tech-json-download",
+                link=file_url,
+                description=f"📥 Download JSON - {items_count:,} registros ({file_size_mb:.2f} MB)"
+            )
+
+            # Preview dos primeiros 3 registros
+            preview_items = payload.get("items", [])[:3]
+            preview_json = json.dumps(preview_items, indent=2, ensure_ascii=False)
+
+            # Cria markdown com resumo
             markdown_content = f"""
 # 📊 Zapt Tech - JSON Consolidado
 
-**Total de registros:** {items_count:,}
-**Tamanho:** {file_size_mb:.2f} MB
-**Shopping:** {sigla_shopping}
+## 📈 Resumo
+
+- **Total de Registros:** {items_count:,}
+- **Tamanho:** {file_size_mb:.2f} MB
+- **Shopping:** {sigla_shopping}
 
 ---
 
-## 📥 JSON Completo
+## 📥 Download
+
+**Arquivo:** `{abs_filepath.name}`
+
+**Localização:** `{abs_filepath.parent}`
+
+---
+
+## 🔍 Preview (primeiros 3 registros)
 
 ```json
-{full_json}
+{preview_json}
 ```
-
----
-
-**Arquivo salvo em:** `{filepath}`
 """
 
             create_markdown_artifact(
-                key="zapt-tech-json-data",  # 👈 SEMPRE O MESMO NOME = SOBRESCREVE
+                key="zapt-tech-json-data",
                 markdown=markdown_content,
-                description=f"JSON Zapt Tech - {items_count:,} registros"
+                description=f"Resumo - {items_count:,} registros"
             )
 
-            logger.info("✅ Artifact criado: zapt-tech-json-data")
+            logger.info("✅ Artifacts criados: zapt-tech-json-download + zapt-tech-json-data")
 
         except Exception as artifact_error:
-            logger.warning(f"⚠️ Erro ao criar artifact: {artifact_error}")
+            logger.warning(f"⚠️ Erro ao criar artifacts: {artifact_error}")
 
         return {
             "status": "saved",
