@@ -124,7 +124,7 @@ def send_flow_success_alert(
         True se enviado com sucesso
     """
     # Formata data/hora
-    now = datetime.now()
+    now = datetime.now() - timedelta(hours=3)
     date_str = now.strftime("%d/%m/%Y às %H:%M")
 
     # Monta mensagem
