@@ -47,18 +47,28 @@ def get_pending_plates(conn, database, schema, batch_size: int = 250) -> List[Di
     cur = conn.cursor()
 
     try:
-        logger.info(f"Buscando até {batch_size} placas pendentes (DS_STATUS = 'N' ou 'E') de DIM_PLACA...")
+        logger.info(f"Buscando até {batch_size} placas pendentes (prioridade: 'E' depois 'N') de DIM_PLACA...")
         cur.execute(f"""
-            SELECT DS_PLACA, DT_INSERCAO
+            SELECT DS_PLACA, DT_INSERCAO, DS_STATUS
             FROM {database}.{schema}.DIM_PLACA
             WHERE DS_STATUS IN ('N', 'E')
-            ORDER BY DT_INSERCAO DESC
+            ORDER BY
+                CASE DS_STATUS
+                    WHEN 'E' THEN 1  -- Prioridade 1: Placas com erro (retry)
+                    WHEN 'N' THEN 2  -- Prioridade 2: Placas novas
+                END,
+                DT_INSERCAO DESC
             LIMIT {batch_size}
         """)
         results = cur.fetchall()
 
         plates = [{"plate": row[0], "date": row[1]} for row in results]
-        logger.info(f"Encontradas {len(plates)} placas (novas + com erro anterior) para processar")
+
+        # Conta quantas são retry (E) vs novas (N)
+        retry_count = sum(1 for row in results if row[2] == 'E')
+        new_count = len(results) - retry_count
+
+        logger.info(f"Encontradas {len(plates)} placas: {retry_count} retry(s) + {new_count} nova(s)")
 
         return plates
 
