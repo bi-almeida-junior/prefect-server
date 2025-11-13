@@ -51,7 +51,7 @@ def get_pending_plates(conn, database, schema, batch_size: int = 250) -> List[Di
         cur.execute(f"""
             SELECT DS_PLACA, DT_INSERCAO
             FROM {database}.{schema}.DIM_PLACA
-            WHERE DS_STATUS = 'N'
+            WHERE DS_STATUS = 'E' OR DS_STATUS = 'N'
             ORDER BY DT_INSERCAO DESC
             LIMIT {batch_size}
         """)
