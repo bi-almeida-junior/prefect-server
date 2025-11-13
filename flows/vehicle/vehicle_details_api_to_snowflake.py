@@ -583,7 +583,7 @@ def vehicle_details_api_to_snowflake(
 
 
 if __name__ == "__main__":
-    # # Execução local para teste
+    # Execução local para teste
     # vehicle_details_api_to_snowflake()
 
     # Deployment para execução agendada
