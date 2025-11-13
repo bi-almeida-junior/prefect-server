@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-import cloudscraper
+from curl_cffi import requests as curl_requests
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
@@ -118,21 +118,12 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
 
 @task(name="query_plate_api", retries=0, log_prints=True, cache_policy=NONE)
 def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
-    """Consulta dados de uma placa na API usando cloudscraper."""
+    """Consulta dados de uma placa na API usando curl_cffi (bypassa Cloudflare)."""
     logger = get_run_logger()
     try:
         plate_no_dash = plate.replace("-", "")
 
-        # Cria scraper com user agent mais realista
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False
-            }
-        )
-
-        # Headers adicionais para parecer mais legítimo
+        # Headers para parecer requisição legítima
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json, text/plain, */*',
@@ -142,7 +133,16 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
         }
 
         json_data = {"placa": plate_no_dash}
-        response = scraper.post(API_URL, json=json_data, headers=headers, timeout=30)
+
+        # Usa curl_cffi com TLS fingerprint do Chrome 110 (Windows)
+        # Isto bypassa Cloudflare, DataDome e outras proteções anti-bot
+        response = curl_requests.post(
+            API_URL,
+            json=json_data,
+            headers=headers,
+            impersonate="chrome110",  # Simula Chrome 110 real no Windows
+            timeout=30
+        )
 
         if response.status_code == 200:
             data = response.json()
@@ -150,24 +150,28 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
             if data.get("success") and data.get("data"):
                 vehicle_data = data.get("data")
                 # Valida se tem dados essenciais (marca ou modelo)
-                if vehicle_data.get("marca") or vehicle_data.get("modelo"):
-                    logger.info(f"[{plate}] ✓ Dados válidos recebidos: {vehicle_data.get('marca')} {vehicle_data.get('modelo')}")
+                marca = vehicle_data.get("marca")
+                modelo = vehicle_data.get("modelo")
+
+                if marca or modelo:
+                    logger.info(f"[{plate}] ✓ Dados válidos: {marca} {modelo}")
                     return vehicle_data
                 else:
-                    logger.warning(f"[{plate}] API retornou success=true mas sem dados válidos de marca/modelo")
+                    logger.warning(f"[{plate}] API retornou success=true mas sem marca/modelo")
                     return None
             else:
-                logger.warning(f"[{plate}] API retornou success={data.get('success')}, data={data.get('data')}")
+                logger.warning(f"[{plate}] API retornou success={data.get('success')}, data presente={data.get('data') is not None}")
                 return None
         elif response.status_code == 429:
             logger.warning(f"[{plate}] Rate limit (429)")
             return {"status": 429}
         elif response.status_code == 403:
-            logger.warning(f"[{plate}] Forbidden (403) - Possível bloqueio anti-bot")
+            logger.warning(f"[{plate}] Forbidden (403) - Bloqueio detectado")
             return None
         else:
-            logger.warning(f"[{plate}] Status code: {response.status_code}")
+            logger.warning(f"[{plate}] Status code inesperado: {response.status_code}")
             return None
+
     except Exception as e:
         logger.error(f"Erro ao consultar {plate}: {e}")
         return None
