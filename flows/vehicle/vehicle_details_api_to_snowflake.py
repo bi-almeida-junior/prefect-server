@@ -21,7 +21,7 @@ from shared.alerts import send_flow_success_alert, send_flow_error_alert
 load_dotenv()
 
 # ====== CONFIGURAÇÕES ======
-BATCH_SIZE = 50  # Quantidade de placas por lote (ajustar conforme necessidade)
+BATCH_SIZE = 250  # Quantidade de placas por lote (ajustar conforme necessidade)
 RATE_LIMIT = 5  # Requisições por minuto (limite da API)
 API_URL = "https://placamaster.com/api/consulta-gratuita"
 
@@ -103,18 +103,22 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
     cur = conn.cursor()
 
     try:
-        plates_str = "', '".join(plates)
         logger.info(f"Atualizando status 'N'/'E' → 'P' para {len(plates)} placas...")
 
+        # Usa parâmetros preparados (segurança contra SQL injection)
+        placeholders = ','.join(['%s'] * len(plates))
         update_sql = f"""
             UPDATE {database}.{schema}.DIM_PLACA
             SET DS_STATUS = 'P'
-            WHERE DS_PLACA IN ('{plates_str}')
+            WHERE DS_PLACA IN ({placeholders})
               AND (DS_STATUS = 'N' OR DS_STATUS = 'E')
         """
 
-        cur.execute(update_sql)
+        cur.execute(update_sql, plates)
         rows_updated = cur.rowcount
+
+        # Commit explícito
+        conn.commit()
 
         logger.info(f"✓ {rows_updated} registros atualizados para status 'P'")
         return rows_updated
@@ -324,18 +328,22 @@ def update_status_error(conn, database, schema, plates: List[str]) -> int:
     cur = conn.cursor()
 
     try:
-        plates_str = "', '".join(plates)
         logger.info(f"Atualizando status 'P' → 'E' para {len(plates)} placas com erro...")
 
+        # Usa parâmetros preparados (segurança contra SQL injection)
+        placeholders = ','.join(['%s'] * len(plates))
         update_sql = f"""
             UPDATE {database}.{schema}.DIM_PLACA
             SET DS_STATUS = 'E'
-            WHERE DS_PLACA IN ('{plates_str}')
+            WHERE DS_PLACA IN ({placeholders})
               AND DS_STATUS = 'P'
         """
 
-        cur.execute(update_sql)
+        cur.execute(update_sql, plates)
         rows_updated = cur.rowcount
+
+        # Commit explícito
+        conn.commit()
 
         logger.info(f"✓ {rows_updated} registros atualizados para status 'E' (erro)")
         return rows_updated
@@ -366,49 +374,49 @@ def insert_data_snowflake(conn, database, schema, df: pd.DataFrame) -> Dict[str,
     try:
         logger.info(f"Inserindo {len(df)} registros em {database}.{schema}.VEICULO_DETALHE...")
 
-        # INSERT na tabela VEICULO_DETALHE
+        # INSERT direto (controle de duplicatas via DS_STATUS na origem)
         insert_sql = f"""
         INSERT INTO {database}.{schema}.VEICULO_DETALHE
             (DS_PLACA, DS_MARCA, DS_MODELO, NR_ANO_FABRICACAO, NR_ANO_MODELO, DS_COR, DT_COLETA_API)
-        VALUES
-            (%s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
 
-        rows_inserted = 0
-        success_plates = []
+        # Prepara registros para batch insert
+        records = [
+            (
+                row['DS_PLACA'],
+                row['DS_MARCA'],
+                row['DS_MODELO'],
+                row['NR_ANO_FABRICACAO'],
+                row['NR_ANO_MODELO'],
+                row['DS_COR'],
+                row['DT_COLETA_API']
+            )
+            for _, row in df.iterrows()
+        ]
 
-        for _, row in df.iterrows():
-            try:
-                record = (
-                    row['DS_PLACA'],
-                    row['DS_MARCA'],
-                    row['DS_MODELO'],
-                    row['NR_ANO_FABRICACAO'],
-                    row['NR_ANO_MODELO'],
-                    row['DS_COR'],
-                    row['DT_COLETA_API']
-                )
+        success_plates = df['DS_PLACA'].tolist()
 
-                cursor.execute(insert_sql, record)
-                rows_inserted += 1
-                success_plates.append(row['DS_PLACA'])
+        # Batch insert (otimizado para até 250 registros)
+        cursor.executemany(insert_sql, records)
+        rows_inserted = cursor.rowcount
 
-            except Exception as insert_error:
-                logger.error(f"Erro ao inserir placa {row['DS_PLACA']}: {insert_error}")
-                continue
+        # Commit explícito
+        conn.commit()
 
         logger.info(f"✓ INSERT concluído: {rows_inserted} registros inseridos")
 
-        # Atualiza status 'P' → 'S' para placas inseridas com sucesso
+        # Atualiza status 'P' → 'S' usando parâmetros preparados
         if success_plates:
-            plates_str = "', '".join(success_plates)
+            placeholders = ','.join(['%s'] * len(success_plates))
             update_success_sql = f"""
                 UPDATE {database}.{schema}.DIM_PLACA
                 SET DS_STATUS = 'S'
-                WHERE DS_PLACA IN ('{plates_str}')
+                WHERE DS_PLACA IN ({placeholders})
                   AND DS_STATUS = 'P'
             """
-            cursor.execute(update_success_sql)
+            cursor.execute(update_success_sql, success_plates)
+            conn.commit()
             logger.info(f"✓ {len(success_plates)} placas atualizadas para status 'S' (sucesso)")
 
         return {"success": rows_inserted, "error": len(df) - rows_inserted}
@@ -536,7 +544,7 @@ def vehicle_details_api_to_snowflake(
         # Artifact
         try:
             create_table_artifact(
-                key="placa-consulta-results",
+                key="plates-results",
                 table=[{
                     "Métrica": "Placas Processadas",
                     "Valor": total_processed
