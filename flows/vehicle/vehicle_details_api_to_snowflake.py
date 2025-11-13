@@ -47,18 +47,18 @@ def get_pending_plates(conn, database, schema, batch_size: int = 250) -> List[Di
     cur = conn.cursor()
 
     try:
-        logger.info(f"Buscando até {batch_size} placas pendentes (DS_STATUS = 'N') de DIM_PLACA...")
+        logger.info(f"Buscando até {batch_size} placas pendentes (DS_STATUS = 'N' ou 'E') de DIM_PLACA...")
         cur.execute(f"""
             SELECT DS_PLACA, DT_INSERCAO
             FROM {database}.{schema}.DIM_PLACA
-            WHERE DS_STATUS = 'E' OR DS_STATUS = 'N'
+            WHERE DS_STATUS IN ('N', 'E')
             ORDER BY DT_INSERCAO DESC
             LIMIT {batch_size}
         """)
         results = cur.fetchall()
 
         plates = [{"plate": row[0], "date": row[1]} for row in results]
-        logger.info(f"Encontradas {len(plates)} placas pendentes para processar")
+        logger.info(f"Encontradas {len(plates)} placas (novas + com erro anterior) para processar")
 
         return plates
 
@@ -73,7 +73,7 @@ def get_pending_plates(conn, database, schema, batch_size: int = 250) -> List[Di
 @task(name="update_status_processing", log_prints=True, cache_policy=NONE)
 def update_status_processing(conn, database, schema, plates: List[str]) -> int:
     """
-    Atualiza DS_STATUS de 'N' para 'P' nas placas selecionadas.
+    Atualiza DS_STATUS de 'N' ou 'E' para 'P' nas placas selecionadas.
 
     Args:
         conn: Conexão Snowflake
@@ -94,13 +94,13 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
 
     try:
         plates_str = "', '".join(plates)
-        logger.info(f"Atualizando status 'N' → 'P' para {len(plates)} placas...")
+        logger.info(f"Atualizando status 'N'/'E' → 'P' para {len(plates)} placas...")
 
         update_sql = f"""
             UPDATE {database}.{schema}.DIM_PLACA
             SET DS_STATUS = 'P'
             WHERE DS_PLACA IN ('{plates_str}')
-              AND DS_STATUS = 'N'
+              AND (DS_STATUS = 'N' OR DS_STATUS = 'E')
         """
 
         cur.execute(update_sql)
