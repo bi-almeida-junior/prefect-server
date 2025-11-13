@@ -1,7 +1,7 @@
 import sys
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 from curl_cffi import requests as curl_requests
@@ -279,7 +279,7 @@ def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "NR_ANO_FABRICACAO": vehicle_data.get("ano_fabricacao"),
                 "NR_ANO_MODELO": vehicle_data.get("ano_modelo"),
                 "DS_COR": color.upper() if color else None,
-                "DT_COLETA_API": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "DT_COLETA_API": (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'),
             })
         elif not vehicle_data or vehicle_data.get("status") != 429:
             # Se não retornou dados (None ou inválido), marca como falha
