@@ -547,21 +547,21 @@ def vehicle_details_api_to_snowflake(
 
 
 if __name__ == "__main__":
-    # Execução local para teste
-    vehicle_details_api_to_snowflake()
+    # # Execução local para teste
+    # vehicle_details_api_to_snowflake()
 
-    # # Deployment para execução agendada
-    # vehicle_details_api_to_snowflake.from_source(
-    #     source=".",
-    #     entrypoint="flows/besistemas/vehicle_details_api_to_snowflake.py:vehicle_details_api_to_snowflake"
-    # ).deploy(
-    #     name="placa-consulta-to-snowflake",
-    #     work_pool_name="local-pool",
-    #     schedules=[
-    #         CronSchedule(cron="0 */4 * * *", timezone="America/Sao_Paulo")  # A cada 4 horas
-    #     ],
-    #     tags=["placas", "api", "snowflake", "veiculos"],
-    #     parameters={},
-    #     description="Pipeline: API Placamaster → Snowflake VEICULO_DETALHE (Bronze)",
-    #     version="1.0.0"
-    # )
+    # Deployment para execução agendada
+    vehicle_details_api_to_snowflake.from_source(
+        source=".",
+        entrypoint="flows/vehicle/vehicle_details_api_to_snowflake.py:vehicle_details_api_to_snowflake"
+    ).deploy(
+        name="vehicle-details-api-to-snowflake",
+        work_pool_name="local-pool",
+        schedules=[
+            CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
+        ],
+        tags=["rpa", "api", "snowflake", "bronze", "dimension"],
+        parameters={},
+        description="Pipeline: API Placamaster → Snowflake VEICULO_DETALHE (Bronze)",
+        version="1.0.0"
+    )
