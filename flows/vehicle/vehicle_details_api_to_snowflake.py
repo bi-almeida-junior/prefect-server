@@ -122,13 +122,30 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
     logger = get_run_logger()
     try:
         plate_no_dash = plate.replace("-", "")
-        scraper = cloudscraper.create_scraper()
+
+        # Cria scraper com user agent mais realista
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False
+            }
+        )
+
+        # Headers adicionais para parecer mais legítimo
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Origin': 'https://placamaster.com',
+            'Referer': 'https://placamaster.com/',
+        }
+
         json_data = {"placa": plate_no_dash}
-        response = scraper.post(API_URL, json=json_data, timeout=30)
+        response = scraper.post(API_URL, json=json_data, headers=headers, timeout=30)
 
         if response.status_code == 200:
             data = response.json()
-            logger.debug(f"[{plate}] Response: {data}")
 
             if data.get("success") and data.get("data"):
                 vehicle_data = data.get("data")
@@ -143,7 +160,11 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
                 logger.warning(f"[{plate}] API retornou success={data.get('success')}, data={data.get('data')}")
                 return None
         elif response.status_code == 429:
+            logger.warning(f"[{plate}] Rate limit (429)")
             return {"status": 429}
+        elif response.status_code == 403:
+            logger.warning(f"[{plate}] Forbidden (403) - Possível bloqueio anti-bot")
+            return None
         else:
             logger.warning(f"[{plate}] Status code: {response.status_code}")
             return None
@@ -559,20 +580,20 @@ def vehicle_details_api_to_snowflake(
 
 if __name__ == "__main__":
     # # Execução local para teste
-    # vehicle_details_api_to_snowflake()
+    vehicle_details_api_to_snowflake()
 
     # Deployment para execução agendada
-    vehicle_details_api_to_snowflake.from_source(
-        source=".",
-        entrypoint="flows/vehicle/vehicle_details_api_to_snowflake.py:vehicle_details_api_to_snowflake"
-    ).deploy(
-        name="vehicle-details-api-to-snowflake",
-        work_pool_name="local-pool",
-        schedules=[
-            CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
-        ],
-        tags=["rpa", "api", "snowflake", "bronze", "dimension"],
-        parameters={},
-        description="Pipeline: API Placamaster → Snowflake VEICULO_DETALHE (Bronze)",
-        version="1.0.0"
-    )
+    # vehicle_details_api_to_snowflake.from_source(
+    #     source=".",
+    #     entrypoint="flows/vehicle/vehicle_details_api_to_snowflake.py:vehicle_details_api_to_snowflake"
+    # ).deploy(
+    #     name="vehicle-details-api-to-snowflake",
+    #     work_pool_name="local-pool",
+    #     schedules=[
+    #         CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
+    #     ],
+    #     tags=["rpa", "api", "snowflake", "bronze", "dimension"],
+    #     parameters={},
+    #     description="Pipeline: API Placamaster → Snowflake VEICULO_DETALHE (Bronze)",
+    #     version="1.0.0"
+    # )
