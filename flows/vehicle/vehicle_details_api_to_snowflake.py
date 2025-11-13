@@ -128,8 +128,14 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
 
         if response.status_code == 200:
             data = response.json()
-            if data.get("success"):
-                return data.get("data")
+            if data.get("success") and data.get("data"):
+                vehicle_data = data.get("data")
+                # Valida se tem dados essenciais (marca ou modelo)
+                if vehicle_data.get("marca") or vehicle_data.get("modelo"):
+                    return vehicle_data
+                else:
+                    logger.warning(f"[{plate}] API retornou success=true mas sem dados válidos de marca/modelo")
+                    return None
             else:
                 return None
         elif response.status_code == 429:
