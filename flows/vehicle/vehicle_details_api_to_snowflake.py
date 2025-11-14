@@ -11,6 +11,7 @@ from prefect import task, flow, get_run_logger
 from prefect.cache_policies import NONE
 from prefect.artifacts import create_table_artifact
 from prefect.client.schemas.schedules import CronSchedule
+from prefect.blocks.system import Secret
 
 # Imports das conexões compartilhadas
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
@@ -21,9 +22,22 @@ from shared.alerts import send_flow_success_alert, send_flow_error_alert
 load_dotenv()
 
 # ====== CONFIGURAÇÕES ======
-BATCH_SIZE = 250  # Quantidade de placas por lote (ajustar conforme necessidade)
+BATCH_SIZE = 5  # Quantidade de placas por lote (ajustar conforme necessidade)
 RATE_LIMIT = 5  # Requisições por minuto (limite da API)
 API_URL = "https://placamaster.com/api/consulta-gratuita"
+
+# ====== SCRIPT DDL PARA ADICIONAR CAMPO DS_MOTIVO_ERRO ======
+# Execute este script manualmente no Snowflake antes de usar status 'I':
+#
+# ALTER TABLE AJ_DATALAKEHOUSE_RPA.BRONZE.BRZ_01_PLACA_RAW
+# ADD COLUMN DS_MOTIVO_ERRO VARCHAR(200) DEFAULT NULL;
+#
+# STATUS 'I' (Inválido) - Usado EXCLUSIVAMENTE para casos irrecuperáveis:
+#   - 404: Placa não encontrada na base Placamaster
+#   - 403: Acesso bloqueado permanentemente
+#   - 500+: Erros de servidor persistentes
+#   - EMPTY_DATA: API retorna success=true mas sem marca/modelo
+# ================================================================
 
 # ESTRATÉGIA:
 # - Busca 250 placas por execução
@@ -36,26 +50,33 @@ API_URL = "https://placamaster.com/api/consulta-gratuita"
 @task(name="get_pending_plates", log_prints=True, cache_policy=NONE)
 def get_pending_plates(conn, database, schema, batch_size: int = 250) -> List[Dict[str, Any]]:
     """
-    Busca registros com DS_STATUS = 'N' da tabela DIM_PLACA.
+    Busca registros com DS_STATUS = 'P', 'E' ou 'N' da tabela BRZ_01_PLACA_RAW.
 
     Lógica:
-    1. Busca até BATCH_SIZE registros com DS_STATUS = 'N'
-    2. Ordena por DT_INSERCAO DESC (mais novos primeiro)
-    3. Retorna lista com placas e seus IDs
+    1. Busca até BATCH_SIZE registros com DS_STATUS IN ('P', 'E', 'N')
+    2. Prioriza 'P' (processando/retry imediato), depois 'E' (erro/retry), depois 'N' (novos)
+    3. Ordena por DT_INSERCAO DESC (mais novos primeiro)
+    4. Retorna lista com placas e seus IDs
+
+    Status:
+    - P: Processando (prioridade máxima - retry imediato)
+    - E: Erro (prioridade alta - retry)
+    - N: Novo (prioridade normal)
     """
     logger = get_run_logger()
     cur = conn.cursor()
 
     try:
-        logger.info(f"Buscando até {batch_size} placas pendentes (prioridade: 'E' depois 'N') de DIM_PLACA...")
+        logger.info(f"Buscando até {batch_size} placas pendentes (prioridade: 'P' > 'E' > 'N') de BRZ_01_PLACA_RAW...")
         cur.execute(f"""
             SELECT DS_PLACA, DT_INSERCAO, DS_STATUS
-            FROM {database}.{schema}.DIM_PLACA
-            WHERE DS_STATUS IN ('N', 'E')
+            FROM {database}.{schema}.BRZ_01_PLACA_RAW
+            WHERE DS_STATUS IN ('P', 'E', 'N')
             ORDER BY
                 CASE DS_STATUS
-                    WHEN 'E' THEN 1  -- Prioridade 1: Placas com erro (retry)
-                    WHEN 'N' THEN 2  -- Prioridade 2: Placas novas
+                    WHEN 'P' THEN 1  -- Prioridade 1: Placas processando (retry imediato)
+                    WHEN 'E' THEN 2  -- Prioridade 2: Placas com erro (retry)
+                    WHEN 'N' THEN 3  -- Prioridade 3: Placas novas
                 END,
                 DT_INSERCAO DESC
             LIMIT {batch_size}
@@ -64,17 +85,18 @@ def get_pending_plates(conn, database, schema, batch_size: int = 250) -> List[Di
 
         plates = [{"plate": row[0], "date": row[1]} for row in results]
 
-        # Conta quantas são retry (E) vs novas (N)
+        # Conta quantas são de cada status
+        processing_count = sum(1 for row in results if row[2] == 'P')
         retry_count = sum(1 for row in results if row[2] == 'E')
-        new_count = len(results) - retry_count
+        new_count = sum(1 for row in results if row[2] == 'N')
 
-        logger.info(f"Encontradas {len(plates)} placas: {retry_count} retry(s) + {new_count} nova(s)")
+        logger.info(f"Encontradas {len(plates)} placas: {processing_count} processando + {retry_count} retry(s) + {new_count} nova(s)")
 
         return plates
 
     except Exception as e:
         logger.warning(f"Erro ao buscar placas pendentes: {e}")
-        logger.info("Tabela DIM_PLACA pode não existir ainda. Retornando lista vazia.")
+        logger.info("Tabela BRZ_01_PLACA_RAW pode não existir ainda. Retornando lista vazia.")
         return []
     finally:
         cur.close()
@@ -108,7 +130,7 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
         # Usa parâmetros preparados (segurança contra SQL injection)
         placeholders = ','.join(['%s'] * len(plates))
         update_sql = f"""
-            UPDATE {database}.{schema}.DIM_PLACA
+            UPDATE {database}.{schema}.BRZ_01_PLACA_RAW
             SET DS_STATUS = 'P'
             WHERE DS_PLACA IN ({placeholders})
               AND (DS_STATUS = 'N' OR DS_STATUS = 'E')
@@ -131,8 +153,16 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
 
 
 @task(name="query_plate_api", retries=0, log_prints=True, cache_policy=NONE)
-def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
-    """Consulta dados de uma placa na API usando curl_cffi (bypassa Cloudflare)."""
+def query_plate_api(plate: str, use_proxy: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Consulta dados de uma placa na API usando curl_cffi (bypassa Cloudflare).
+
+    Retorna:
+    - Dict com dados do veículo se sucesso
+    - {"status": 429} se rate limit (reprocessável)
+    - {"status": "invalid", "reason": "..."} se erro irrecuperável (404, 403, 500+, EMPTY_DATA)
+    - None para outros erros (reprocessável)
+    """
     logger = get_run_logger()
     try:
         plate_no_dash = plate.replace("-", "")
@@ -148,15 +178,51 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
 
         json_data = {"placa": plate_no_dash}
 
+        # Configuração do proxy
+        proxies = None
+        if use_proxy:
+            try:
+                proxy_http_block = Secret.load("dataimpulse-proxy-http")
+                proxy_https_block = Secret.load("dataimpulse-proxy-https")
+
+                proxies = {
+                    'http': proxy_http_block.get(),
+                    'https': proxy_https_block.get()
+                }
+                logger.info(f"[{plate}] Usando proxy para requisição")
+            except Exception as e:
+                logger.warning(f"[{plate}] Erro ao carregar proxy blocks: {e}. Continuando sem proxy.")
+                proxies = None
+
         # Usa curl_cffi com TLS fingerprint do Chrome 110 (Windows)
         # Isto bypassa Cloudflare, DataDome e outras proteções anti-bot
         response = curl_requests.post(
             API_URL,
             json=json_data,
             headers=headers,
-            impersonate="chrome110",  # Simula Chrome 110 real no Windows
+            proxies=proxies,              # Adiciona o proxy aqui
+            impersonate="chrome110",      # Simula Chrome 110 real no Windows
             timeout=30
         )
+
+        # ===== DETECÇÃO DE CASOS IRRECUPERÁVEIS (STATUS 'I') =====
+
+        # CASO 1: 404 - Placa não encontrada na base Placamaster
+        if response.status_code == 404:
+            logger.warning(f"[{plate}] ⚠ 404 - Placa não encontrada (IRRECUPERÁVEL)")
+            return {"status": "invalid", "reason": "404_NOT_FOUND"}
+
+        # CASO 2: 403 - Bloqueio permanente
+        if response.status_code == 403:
+            logger.warning(f"[{plate}] ⚠ 403 - Acesso bloqueado permanentemente (IRRECUPERÁVEL)")
+            return {"status": "invalid", "reason": "403_FORBIDDEN"}
+
+        # CASO 3: 500+ - Erros de servidor persistentes
+        if response.status_code >= 500:
+            logger.warning(f"[{plate}] ⚠ {response.status_code} - Erro de servidor (IRRECUPERÁVEL)")
+            return {"status": "invalid", "reason": f"{response.status_code}_SERVER_ERROR"}
+
+        # ===== PROCESSAMENTO NORMAL =====
 
         if response.status_code == 200:
             data = response.json()
@@ -171,17 +237,19 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
                     logger.info(f"[{plate}] ✓ Dados válidos: {marca} {modelo}")
                     return vehicle_data
                 else:
-                    logger.warning(f"[{plate}] API retornou success=true mas sem marca/modelo")
-                    return None
+                    # CASO 4: Dados vazios (success=true mas sem marca/modelo)
+                    logger.warning(f"[{plate}] ⚠ API retornou success mas SEM marca/modelo (IRRECUPERÁVEL)")
+                    return {"status": "invalid", "reason": "EMPTY_DATA"}
             else:
                 logger.warning(f"[{plate}] API retornou success={data.get('success')}, data presente={data.get('data') is not None}")
                 return None
+
+        # Rate limit (429) - REPROCESSÁVEL
         elif response.status_code == 429:
             logger.warning(f"[{plate}] Rate limit (429)")
             return {"status": 429}
-        elif response.status_code == 403:
-            logger.warning(f"[{plate}] Forbidden (403) - Bloqueio detectado")
-            return None
+
+        # Outros erros - REPROCESSÁVEL
         else:
             logger.warning(f"[{plate}] Status code inesperado: {response.status_code}")
             return None
@@ -193,7 +261,14 @@ def query_plate_api(plate: str) -> Optional[Dict[str, Any]]:
 
 @task(name="process_plate_batch", log_prints=True, cache_policy=NONE)
 def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Processa um lote de placas respeitando rate limit de 5 req/min."""
+    """
+    Processa um lote de placas respeitando rate limit de 5 req/min.
+
+    Retorna:
+    - df: DataFrame com placas processadas com sucesso
+    - failed_plates: Lista de placas com erro temporário (status E)
+    - invalid_plates: Dict com placas inválidas e seus motivos (status I)
+    """
     logger = get_run_logger()
 
     # ✅ CONFIGURAÇÃO
@@ -210,6 +285,7 @@ def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_429 = 0
     total_retries = 0
     failed_plates = []
+    invalid_plates = {}  # Dict: {placa: motivo}
 
     logger.info(f"Processando {len(plates_info)} placas (5 req/min, max {MAX_RETRIES} retries)")
 
@@ -253,7 +329,16 @@ def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
             request_timestamps.append(request_time)
             last_request_time = request_time
 
-            if vehicle_data and vehicle_data.get("status") == 429:
+            # ===== DETECÇÃO DE CASO IRRECUPERÁVEL (STATUS 'I') =====
+            if vehicle_data and vehicle_data.get("status") == "invalid":
+                reason = vehicle_data.get("reason", "UNKNOWN")
+                invalid_plates[plate] = reason
+                logger.warning(f"[{plate}] ⚠ IRRECUPERÁVEL: {reason}")
+                vehicle_data = None
+                break  # Não faz retry para casos inválidos
+
+            # ===== PROCESSAMENTO DE RATE LIMIT (429) =====
+            elif vehicle_data and vehicle_data.get("status") == 429:
                 attempts += 1
                 total_429 += 1
                 total_retries += 1
@@ -265,16 +350,20 @@ def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
                     current_time = time.time()
                     request_timestamps = [t for t in request_timestamps if current_time - t < WINDOW_DURATION]
                 else:
-                    logger.error(f"[{plate}] FALHOU após {MAX_RETRIES} tentativas")
+                    logger.error(f"[{plate}] FALHOU após {MAX_RETRIES} tentativas (429)")
                     failed_plates.append(plate)
                     vehicle_data = None
                     break
+
+            # ===== SUCESSO OU OUTRO ERRO =====
             else:
                 if attempts > 0:
                     logger.info(f"[{plate}] ✓ Sucesso após {attempts} retry(s)")
                 break
 
-        if vehicle_data and vehicle_data.get("status") != 429:
+        # ===== PROCESSA RESULTADO =====
+        # Sucesso: adiciona aos resultados
+        if vehicle_data and vehicle_data.get("status") != 429 and vehicle_data.get("status") != "invalid":
             color = vehicle_data.get("cor")
             results.append({
                 "DS_PLACA": plate,
@@ -285,24 +374,28 @@ def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "DS_COR": color.upper() if color else None,
                 "DT_COLETA_API": (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'),
             })
-        elif not vehicle_data or vehicle_data.get("status") != 429:
-            # Se não retornou dados (None ou inválido), marca como falha
-            if plate not in failed_plates:
+        # Falha temporária: adiciona à lista de erros
+        elif not vehicle_data:
+            # Só adiciona se não estiver em invalid_plates nem em failed_plates
+            if plate not in invalid_plates and plate not in failed_plates:
                 failed_plates.append(plate)
-                logger.warning(f"[{plate}] API não retornou dados válidos")
+                logger.warning(f"[{plate}] API não retornou dados válidos (erro temporário)")
 
     # ✅ RESUMO FINAL OBJETIVO
     logger.info("=" * 60)
-    logger.info(f"RESULTADO: {len(results)}/{len(plates_info)} placas processadas")
+    logger.info(f"RESULTADO: {len(results)}/{len(plates_info)} placas processadas com sucesso")
     if total_429 > 0:
         logger.warning(f"Total 429 recebidos: {total_429} | Retries executados: {total_retries}")
     if failed_plates:
-        logger.error(f"Placas não processadas ({len(failed_plates)}): {', '.join(failed_plates)}")
+        logger.warning(f"Erros temporários ({len(failed_plates)}): {', '.join(failed_plates)}")
+    if invalid_plates:
+        logger.warning(f"⚠ Placas INVÁLIDAS ({len(invalid_plates)}): {', '.join(invalid_plates.keys())}")
     logger.info("=" * 60)
 
     return {
         "df": pd.DataFrame(results) if results else pd.DataFrame(),
-        "failed_plates": failed_plates
+        "failed_plates": failed_plates,
+        "invalid_plates": invalid_plates  # Novo retorno
     }
 
 
@@ -333,7 +426,7 @@ def update_status_error(conn, database, schema, plates: List[str]) -> int:
         # Usa parâmetros preparados (segurança contra SQL injection)
         placeholders = ','.join(['%s'] * len(plates))
         update_sql = f"""
-            UPDATE {database}.{schema}.DIM_PLACA
+            UPDATE {database}.{schema}.BRZ_01_PLACA_RAW
             SET DS_STATUS = 'E'
             WHERE DS_PLACA IN ({placeholders})
               AND DS_STATUS = 'P'
@@ -355,10 +448,71 @@ def update_status_error(conn, database, schema, plates: List[str]) -> int:
         cur.close()
 
 
+@task(name="update_status_invalid", log_prints=True, cache_policy=NONE)
+def update_status_invalid(conn, database, schema, plates_with_reasons: Dict[str, str]) -> int:
+    """
+    Atualiza DS_STATUS de 'P' para 'I' (Inválido) nas placas com erros irrecuperáveis.
+
+    CASOS EXCLUSIVOS para status 'I':
+    - 404: Placa não encontrada na base Placamaster
+    - 403: Acesso bloqueado permanentemente
+    - 500+: Erros de servidor persistentes (500, 502, 503, 504)
+    - EMPTY_DATA: API retorna success=true mas sem marca/modelo
+
+    Args:
+        conn: Conexão Snowflake
+        database: Database
+        schema: Schema
+        plates_with_reasons: Dict com placa como chave e motivo como valor
+                           Exemplo: {"ABC1234": "404_NOT_FOUND", "XYZ5678": "EMPTY_DATA"}
+
+    Returns:
+        Número de registros atualizados
+    """
+    logger = get_run_logger()
+
+    if not plates_with_reasons:
+        return 0
+
+    cur = conn.cursor()
+
+    try:
+        logger.warning(f"⚠ Marcando {len(plates_with_reasons)} placas como INVÁLIDAS (status 'I')")
+
+        rows_updated = 0
+
+        # Atualiza cada placa individualmente para poder setar o motivo específico
+        for plate, reason in plates_with_reasons.items():
+            update_sql = f"""
+                UPDATE {database}.{schema}.BRZ_01_PLACA_RAW
+                SET DS_STATUS = 'I',
+                    DS_MOTIVO_ERRO = %s
+                WHERE DS_PLACA = %s
+                  AND DS_STATUS = 'P'
+            """
+
+            cur.execute(update_sql, (reason, plate))
+            rows_updated += cur.rowcount
+
+            logger.warning(f"  └─ [{plate}] Motivo: {reason}")
+
+        # Commit explícito
+        conn.commit()
+
+        logger.warning(f"✓ {rows_updated} registros marcados como status 'I' (inválido/irrecuperável)")
+        return rows_updated
+
+    except Exception as e:
+        logger.error(f"Erro ao atualizar status para 'I': {e}")
+        raise
+    finally:
+        cur.close()
+
+
 @task(name="insert_data_snowflake", log_prints=True, cache_policy=NONE)
 def insert_data_snowflake(conn, database, schema, df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Insere dados no Snowflake e atualiza status na DIM_PLACA.
+    Insere dados no Snowflake e atualiza status na BRZ_01_PLACA_RAW.
 
     Returns:
         Dict com contadores de sucesso e erro
@@ -372,11 +526,11 @@ def insert_data_snowflake(conn, database, schema, df: pd.DataFrame) -> Dict[str,
     cursor = conn.cursor()
 
     try:
-        logger.info(f"Inserindo {len(df)} registros em {database}.{schema}.VEICULO_DETALHE...")
+        logger.info(f"Inserindo {len(df)} registros em {database}.{schema}.BRZ_02_VEICULO_DETALHE...")
 
         # INSERT direto (controle de duplicatas via DS_STATUS na origem)
         insert_sql = f"""
-        INSERT INTO {database}.{schema}.VEICULO_DETALHE
+        INSERT INTO {database}.{schema}.BRZ_02_VEICULO_DETALHE
             (DS_PLACA, DS_MARCA, DS_MODELO, NR_ANO_FABRICACAO, NR_ANO_MODELO, DS_COR, DT_COLETA_API)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
@@ -410,7 +564,7 @@ def insert_data_snowflake(conn, database, schema, df: pd.DataFrame) -> Dict[str,
         if success_plates:
             placeholders = ','.join(['%s'] * len(success_plates))
             update_success_sql = f"""
-                UPDATE {database}.{schema}.DIM_PLACA
+                UPDATE {database}.{schema}.BRZ_01_PLACA_RAW
                 SET DS_STATUS = 'S'
                 WHERE DS_PLACA IN ({placeholders})
                   AND DS_STATUS = 'P'
@@ -463,8 +617,6 @@ def vehicle_details_api_to_snowflake(
     snowflake_role = snowflake_role or os.getenv("SNOWFLAKE_ROLE")
 
     # Databases e schemas
-    source_database = "AJ_DATALAKEHOUSE_WPS"
-    source_schema = "SILVER"
     dest_database = "AJ_DATALAKEHOUSE_RPA"
     dest_schema = "BRONZE"
 
@@ -507,6 +659,7 @@ def vehicle_details_api_to_snowflake(
             result = process_plate_batch(batch)
             df = result["df"]
             failed_plates = result["failed_plates"]
+            invalid_plates = result.get("invalid_plates", {})  # Novo campo
 
             # Insere no Snowflake e atualiza status 'S' para sucesso
             if not df.empty:
@@ -514,7 +667,12 @@ def vehicle_details_api_to_snowflake(
                 total_inserted += insert_result["success"]
                 total_errors += insert_result["error"]
 
-            # Atualiza status 'E' para placas que falharam na API
+            # Atualiza status 'I' para placas INVÁLIDAS (irrecuperáveis)
+            if invalid_plates:
+                update_status_invalid(conn, dest_database, dest_schema, invalid_plates)
+                total_errors += len(invalid_plates)
+
+            # Atualiza status 'E' para placas que falharam na API (temporário)
             if failed_plates:
                 update_status_error(conn, dest_database, dest_schema, failed_plates)
                 total_errors += len(failed_plates)
@@ -533,7 +691,7 @@ def vehicle_details_api_to_snowflake(
         logger.info("=" * 80)
         logger.info(f"Database: {dest_database}")
         logger.info(f"Schema:   {dest_schema}")
-        logger.info(f"Tabela:   VEICULO_DETALHE")
+        logger.info(f"Tabela:   BRZ_02_VEICULO_DETALHE")
         logger.info(f"Início:   {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Fim:      {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Duração:  {int(m)}m {int(s)}s")
@@ -602,20 +760,20 @@ def vehicle_details_api_to_snowflake(
 
 if __name__ == "__main__":
     # Execução local para teste
-    # vehicle_details_api_to_snowflake()
+    vehicle_details_api_to_snowflake()
 
     # Deployment para execução agendada
-    vehicle_details_api_to_snowflake.from_source(
-        source=".",
-        entrypoint="flows/vehicle/vehicle_details_api_to_snowflake.py:vehicle_details_api_to_snowflake"
-    ).deploy(
-        name="vehicle-details-api-to-snowflake",
-        work_pool_name="local-pool",
-        schedules=[
-            CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
-        ],
-        tags=["rpa", "api", "snowflake", "bronze", "dimension"],
-        parameters={},
-        description="Pipeline: API Placamaster → Snowflake VEICULO_DETALHE (Bronze)",
-        version="1.0.0"
-    )
+    # vehicle_details_api_to_snowflake.from_source(
+    #     source=".",
+    #     entrypoint="flows/vehicle/vehicle_details_api_to_snowflake.py:vehicle_details_api_to_snowflake"
+    # ).deploy(
+    #     name="vehicle-details-api-to-snowflake",
+    #     work_pool_name="local-pool",
+    #     schedules=[
+    #         CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
+    #     ],
+    #     tags=["rpa", "api", "snowflake", "bronze", "dimension"],
+    #     parameters={},
+    #     description="Pipeline: API Placamaster → Snowflake BRZ_02_VEICULO_DETALHE (Bronze)",
+    #     version="1.0.0"
+    # )
