@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -185,6 +186,35 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
         cur.close()
 
 
+def validate_and_normalize_plate(plate: str) -> Optional[str]:
+    """
+    Valida e normaliza placa para o formato aceito pela API.
+
+    Formatos válidos:
+    - Antigo: ABC1234 (3 letras + 4 números)
+    - Mercosul: ABC1D23 (3 letras + 1 número + 1 letra + 2 números)
+
+    Returns:
+        Placa normalizada (sem hífen) ou None se inválida
+    """
+    if not plate:
+        return None
+
+    # Remove espaços, hífens e converte para maiúsculo
+    plate_clean = plate.replace("-", "").replace(" ", "").upper().strip()
+
+    # Padrão Antigo: 3 letras + 4 números (ABC1234)
+    pattern_old = r'^[A-Z]{3}\d{4}$'
+
+    # Padrão Mercosul: 3 letras + 1 número + 1 letra + 2 números (ABC1D23)
+    pattern_mercosul = r'^[A-Z]{3}\d[A-Z]\d{2}$'
+
+    if re.match(pattern_old, plate_clean) or re.match(pattern_mercosul, plate_clean):
+        return plate_clean
+    else:
+        return None
+
+
 @task(name="query_plate_api", retries=0, log_prints=True, cache_policy=NONE)
 def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
     """
@@ -203,7 +233,14 @@ def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Opt
     """
     logger = get_run_logger()
     try:
-        plate_no_dash = plate.replace("-", "")
+        # plate_no_dash = plate.replace("-", "")
+
+        # ✅ VALIDAÇÃO E NORMALIZAÇÃO DA PLACA
+        plate_normalized = validate_and_normalize_plate(plate)
+
+        if not plate_normalized:
+            logger.warning(f"[{plate}] ⚠ Formato de placa inválido (não é ABC1234 ou ABC1D23)")
+            return {"status": "invalid", "reason": "INVALID_PLATE_FORMAT"}
 
         # Headers para parecer requisição legítima
         # headers = {
