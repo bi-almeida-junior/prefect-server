@@ -22,7 +22,7 @@ from shared.alerts import send_flow_success_alert, send_flow_error_alert
 load_dotenv()
 
 # ====== CONFIGURAÇÕES ======
-BATCH_SIZE = 250  # Quantidade de placas por lote (ajustar conforme necessidade)
+BATCH_SIZE = 5  # Quantidade de placas por lote (ajustar conforme necessidade)
 RATE_LIMIT = 5  # Requisições por minuto (limite da API)
 API_URL = "https://placamaster.com/api/consulta-gratuita"
 
@@ -46,6 +46,38 @@ API_URL = "https://placamaster.com/api/consulta-gratuita"
 # - 250 placas = ~50 minutos de processamento
 # - Executar a cada 1 hora = eficiente e seguro
 # - Uma única conexão Snowflake + INSERT direto = otimizado
+
+
+@task(name="load_proxy_settings", log_prints=True, cache_policy=NONE)
+def load_proxy_settings() -> Optional[Dict[str, str]]:
+    """
+    Carrega configurações de proxy do Prefect Blocks UMA ÚNICA VEZ.
+
+    Esta função evita carregar secrets repetidamente (antes carregava 500x por execução!).
+    Agora carrega apenas 1x e reutiliza para todas as 250 requisições.
+
+    Returns:
+        Dict com proxies {'http': '...', 'https': '...'} ou None se falhar
+    """
+    logger = get_run_logger()
+    try:
+        logger.info("🔐 Carregando configurações de proxy do Prefect Blocks...")
+
+        proxy_http_block = Secret.load("dataimpulse-proxy-http")
+        proxy_https_block = Secret.load("dataimpulse-proxy-https")
+
+        proxies = {
+            'http': proxy_http_block.get(),
+            'https': proxy_https_block.get()
+        }
+
+        logger.info("✓ Proxy carregado com sucesso (será reutilizado para todas as requisições)")
+        return proxies
+
+    except Exception as e:
+        logger.warning(f"⚠ Erro ao carregar proxy blocks: {e}")
+        logger.warning("Continuando SEM proxy (requisições podem ser bloqueadas pelo Cloudflare)")
+        return None
 
 
 @task(name="get_pending_plates", log_prints=True, cache_policy=NONE)
@@ -154,9 +186,14 @@ def update_status_processing(conn, database, schema, plates: List[str]) -> int:
 
 
 @task(name="query_plate_api", retries=0, log_prints=True, cache_policy=NONE)
-def query_plate_api(plate: str, use_proxy: bool = True) -> Optional[Dict[str, Any]]:
+def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
     """
     Consulta dados de uma placa na API usando curl_cffi (bypassa Cloudflare).
+
+    Args:
+        plate: Placa do veículo
+        proxies: Dict com configurações de proxy {'http': '...', 'https': '...'}
+                 Se None, faz requisição sem proxy
 
     Retorna:
     - Dict com dados do veículo se sucesso
@@ -179,29 +216,13 @@ def query_plate_api(plate: str, use_proxy: bool = True) -> Optional[Dict[str, An
 
         json_data = {"placa": plate_no_dash}
 
-        # Configuração do proxy
-        proxies = None
-        if use_proxy:
-            try:
-                proxy_http_block = Secret.load("dataimpulse-proxy-http")
-                proxy_https_block = Secret.load("dataimpulse-proxy-https")
-
-                proxies = {
-                    'http': proxy_http_block.get(),
-                    'https': proxy_https_block.get()
-                }
-                logger.info(f"[{plate}] Usando proxy para requisição")
-            except Exception as e:
-                logger.warning(f"[{plate}] Erro ao carregar proxy blocks: {e}. Continuando sem proxy.")
-                proxies = None
-
         # Usa curl_cffi com TLS fingerprint do Chrome 110 (Windows)
         # Isto bypassa Cloudflare, DataDome e outras proteções anti-bot
         response = curl_requests.post(
             API_URL,
             json=json_data,
             headers=headers,
-            proxies=proxies,  # Adiciona o proxy aqui
+            proxies=proxies,  # Usa proxy passado como parâmetro (carregado UMA VEZ no início)
             impersonate="chrome110",  # Simula Chrome 110 real no Windows
             timeout=30
         )
@@ -261,9 +282,13 @@ def query_plate_api(plate: str, use_proxy: bool = True) -> Optional[Dict[str, An
 
 
 @task(name="process_plate_batch", log_prints=True, cache_policy=NONE)
-def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
+def process_plate_batch(plates_info: List[Dict[str, Any]], proxies: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Processa um lote de placas respeitando rate limit de 5 req/min.
+
+    Args:
+        plates_info: Lista de informações das placas
+        proxies: Configurações de proxy (carregado UMA VEZ na função principal)
 
     Retorna:
     - df: DataFrame com placas processadas com sucesso
@@ -326,7 +351,7 @@ def process_plate_batch(plates_info: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         while attempts < MAX_RETRIES:
             request_time = time.time()
-            vehicle_data = query_plate_api(plate)
+            vehicle_data = query_plate_api(plate, proxies)  # Passa proxy carregado UMA VEZ
             request_timestamps.append(request_time)
             last_request_time = request_time
 
@@ -645,6 +670,9 @@ def vehicle_details_api_to_snowflake(
         plates_list = [p["plate"] for p in plates_info]
         update_status_processing(conn, dest_database, dest_schema, plates_list)
 
+        # ✅ OTIMIZAÇÃO: Carrega proxy UMA ÚNICA VEZ (antes carregava 500x!)
+        proxies = load_proxy_settings()
+
         # Processa em lotes
         total_processed = 0
         total_inserted = 0
@@ -656,8 +684,8 @@ def vehicle_details_api_to_snowflake(
 
             logger.info(f"Lote {batch_start // batch_size + 1}: Processando placas {batch_start + 1}-{batch_end}/{len(plates_info)}")
 
-            # Processa lote
-            result = process_plate_batch(batch)
+            # Processa lote (passa proxy carregado UMA VEZ)
+            result = process_plate_batch(batch, proxies)
             df = result["df"]
             failed_plates = result["failed_plates"]
             invalid_plates = result.get("invalid_plates", {})  # Novo campo
