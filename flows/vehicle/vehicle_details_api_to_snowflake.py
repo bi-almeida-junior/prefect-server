@@ -256,7 +256,7 @@ def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Opt
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
 
-        json_data = {"placa": plate_no_dash}
+        json_data = {"placa": plate_normalized}
 
         # Usa curl_cffi com TLS fingerprint do Chrome 110 (Windows)
         # Isto bypassa Cloudflare, DataDome e outras proteções anti-bot
