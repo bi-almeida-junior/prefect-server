@@ -1032,7 +1032,7 @@ if __name__ == "__main__":
         source=".",
         entrypoint="flows/vehicle/vehicle_fipe_to_snowflake.py:vehicle_fipe_to_snowflake"
     ).deploy(
-        name="vehicle-details-api-to-snowflake",
+        name="vehicle-fipe-to-snowflake",
         work_pool_name="local-pool",
         schedules=[
             CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
