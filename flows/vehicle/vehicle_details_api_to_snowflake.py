@@ -206,12 +206,17 @@ def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Opt
         plate_no_dash = plate.replace("-", "")
 
         # Headers para parecer requisição legítima
+        # headers = {
+        #     'Content-Type': 'application/json',
+        #     'Accept': 'application/json, text/plain, */*',
+        #     'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        #     'Origin': 'https://placamaster.com',
+        #     'Referer': 'https://placamaster.com/',
+        # }
         headers = {
             'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Origin': 'https://placamaster.com',
-            'Referer': 'https://placamaster.com/',
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
 
         json_data = {"placa": plate_no_dash}
