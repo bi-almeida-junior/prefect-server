@@ -22,9 +22,10 @@ from shared.alerts import send_flow_success_alert, send_flow_error_alert
 load_dotenv()
 
 # ====== CONFIGURAÇÕES ======
-BATCH_SIZE = 5  # Quantidade de placas por lote (ajustar conforme necessidade)
+BATCH_SIZE = 250  # Quantidade de placas por lote (ajustar conforme necessidade)
 RATE_LIMIT = 5  # Requisições por minuto (limite da API)
 API_URL = "https://placamaster.com/api/consulta-gratuita"
+
 
 # ====== SCRIPT DDL PARA ADICIONAR CAMPO DS_MOTIVO_ERRO ======
 # Execute este script manualmente no Snowflake antes de usar status 'I':
@@ -200,8 +201,8 @@ def query_plate_api(plate: str, use_proxy: bool = True) -> Optional[Dict[str, An
             API_URL,
             json=json_data,
             headers=headers,
-            proxies=proxies,              # Adiciona o proxy aqui
-            impersonate="chrome110",      # Simula Chrome 110 real no Windows
+            proxies=proxies,  # Adiciona o proxy aqui
+            impersonate="chrome110",  # Simula Chrome 110 real no Windows
             timeout=30
         )
 
@@ -772,8 +773,8 @@ if __name__ == "__main__":
         schedules=[
             CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
         ],
-        tags=["rpa", "api", "snowflake", "bronze", "dimension"],
+        tags=["rpa", "api", "snowflake", "bronze"],
         parameters={},
-        description="Pipeline: API Placamaster → Snowflake BRZ_02_VEICULO_DETALHE (Bronze)",
+        description="🚘 Integração API → Snowflake | Consulta detalhes de veículos por placa (marca, modelo, ano, cor) e carrega na Bronze. Processa até 250 placas/hora com rate limit (5 req/min), retry automático, bypass Cloudflare, proxy DataImpulse e gestão de status (N/P/E/S/I).",
         version="1.0.0"
     )
