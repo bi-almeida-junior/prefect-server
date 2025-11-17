@@ -270,7 +270,7 @@ def process_forecast_weather(weather_data_list: List[Dict[str, Any]]) -> pd.Data
                 'DS_FASE_LUA': forecast_day['moon_phase'],
                 'DS_DESCRICAO_TEMPO': forecast_day['description'],
                 'DS_CONDICAO_TEMPO': forecast_day['condition'],
-                'DT_COLETA_API': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'DT_COLETA_API': (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
             })
 
     df = pd.DataFrame(forecast_records)
