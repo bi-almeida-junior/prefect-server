@@ -72,9 +72,46 @@ def load_api_key() -> Optional[str]:
         return api_key
 
     except Exception as e:
-        logger.error(f"❌ Erro ao carregar API Key: {e}")
+        logger.error(f"❌ Erro ao carregar API Key: {type(e).__name__}")
         logger.error("Certifique-se de que o secret 'hgbrasil-weather-api-key' existe no Prefect")
-        raise
+        raise ValueError("Failed to load API key") from e
+
+
+def validate_weather_response(data: dict, cidade: dict) -> Dict[str, Any]:
+    """Valida estrutura e tipos da resposta da API"""
+    if not isinstance(data, dict):
+        raise ValueError("Resposta deve ser dict")
+
+    if not data.get('valid_key'):
+        raise ValueError("API key inválida")
+
+    results = data.get('results')
+    if not isinstance(results, dict):
+        raise ValueError("Campo 'results' ausente ou inválido")
+
+    # Valida campos obrigatórios
+    required = ['city', 'temp', 'humidity', 'forecast']
+    for field in required:
+        if field not in results:
+            raise ValueError(f"Campo obrigatório ausente: {field}")
+
+    # Valida tipos
+    if not isinstance(results['temp'], (int, float)):
+        raise ValueError("Temperatura deve ser numérica")
+
+    if not isinstance(results['forecast'], list):
+        raise ValueError("Forecast deve ser lista")
+
+    return {
+        'id_cidade': cidade['id'],
+        'cidade': str(results['city'])[:255],
+        'latitude': results.get('latitude', results.get('lat')),
+        'longitude': results.get('longitude', results.get('lon')),
+        'temperatura_atual': float(results['temp']),
+        'umidade_atual': int(results['humidity']),
+        'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'previsao_15_dias': results['forecast']
+    }
 
 
 @task(name="fetch_weather_data", log_prints=True, cache_policy=NONE)
@@ -107,32 +144,21 @@ def fetch_weather_data(api_key: str, cidade: Dict[str, Any]) -> Optional[Dict[st
         if response.status_code == 200:
             data = response.json()
 
-            if data.get('valid_key'):
-                results = data['results']
-
-                logger.info(f"   ✓ Cidade: {results.get('city', 'N/A')}")
-                logger.info(f"   ✓ Temp atual: {results.get('temp', 'N/A')}°C")
-                logger.info(f"   ✓ Dias previsão: {len(results.get('forecast', []))}")
-
-                return {
-                    'id_cidade': cidade['id'],
-                    'cidade': results.get('city'),
-                    'latitude': results.get('latitude', results.get('lat', None)),
-                    'longitude': results.get('longitude', results.get('lon', None)),
-                    'temperatura_atual': results.get('temp'),
-                    'umidade_atual': results.get('humidity'),
-                    'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'previsao_15_dias': results.get('forecast', [])
-                }
-            else:
-                logger.warning(f"⚠️ API Key inválida para {cidade_nome}")
+            try:
+                validated = validate_weather_response(data, cidade)
+                logger.info(f"   ✓ Cidade: {validated['cidade']}")
+                logger.info(f"   ✓ Temp: {validated['temperatura_atual']}°C")
+                logger.info(f"   ✓ Previsão: {len(validated['previsao_15_dias'])} dias")
+                return validated
+            except ValueError as ve:
+                logger.error(f"   ❌ Validação falhou: {ve}")
                 return None
         else:
-            logger.error(f"❌ Erro HTTP {response.status_code} para {cidade_nome}")
+            logger.error(f"❌ HTTP {response.status_code} para {cidade_nome}")
             return None
 
     except Exception as e:
-        logger.error(f"❌ Erro ao consultar {cidade.get('nome', 'N/A')}: {e}")
+        logger.error(f"❌ Erro ao consultar {cidade.get('nome', 'N/A')}: {type(e).__name__}")
         return None
 
 
