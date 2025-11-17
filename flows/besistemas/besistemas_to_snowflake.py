@@ -228,9 +228,13 @@ def load_chunk_to_snowflake(conn, database, schema, table_name, df) -> int:
 
         # Usa diretório temporário do sistema (Linux: /tmp, Windows: C:\Temp)
         import tempfile
+        import re
+
+        # Sanitiza table_name para prevenir path traversal
+        safe_table_name = re.sub(r'[^A-Za-z0-9_]', '_', table_name)
         temp_dir = tempfile.gettempdir()
 
-        temp_file_path = os.path.join(temp_dir, f"snowflake_{table_name}_chunk.csv")
+        temp_file_path = os.path.join(temp_dir, f"snowflake_{safe_table_name}_chunk.csv")
         with open(temp_file_path, 'w', encoding='utf-8', newline='') as f:
             f.write(csv_content)
 
