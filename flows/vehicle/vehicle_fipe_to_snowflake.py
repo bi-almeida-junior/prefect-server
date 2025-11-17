@@ -1,7 +1,7 @@
 import sys
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 import requests
@@ -740,7 +740,7 @@ def process_vehicle_batch(vehicles: List[Dict[str, Any]], table_code: str) -> Di
                 "DS_MES_REFERENCIA": fipe_data.get("MesReferencia"),
                 "CD_AUTENTICACAO": fipe_data.get("Autenticacao"),
                 "NR_TIPO_VEICULO": 1,  # 1 = Carro
-                "DT_CONSULTA_FIPE": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "DT_CONSULTA_FIPE": (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'),
                 "CHAVE_VEICULO": vehicle["chave"]  # Chave composta para identificação
             })
         else:
