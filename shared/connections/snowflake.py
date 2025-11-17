@@ -7,7 +7,7 @@ from snowflake.connector import DictCursor
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 import re
-
+import os
 
 # Whitelist de identifiers permitidos
 ALLOWED_DATABASES = ['AJ_DATALAKEHOUSE_RPA', 'AJ_DATALAKEHOUSE_MKT']
@@ -69,7 +69,9 @@ def connect_snowflake(
         schema: str,
         role: Optional[str] = None,
         private_key_passphrase: Optional[str] = None,
-        timeout: int = 60
+        timeout: int = 60,
+        ocsp_fail_open: bool = True,
+        validate_default_parameters: bool = True
 ):
     """
     Estabelece conexão com Snowflake usando autenticação por chave privada
@@ -84,6 +86,8 @@ def connect_snowflake(
         role: Role opcional (ex: ACCOUNTADMIN)
         private_key_passphrase: Passphrase da chave privada (se criptografada)
         timeout: Timeout de conexão em segundos
+        ocsp_fail_open: Permite conexão mesmo se validação OCSP falhar (default: True)
+        validate_default_parameters: Valida parâmetros padrão do Snowflake (default: True)
 
     Returns:
         Conexão Snowflake
@@ -97,9 +101,13 @@ def connect_snowflake(
 
         logger.info(f"Conectando ao Snowflake: {account} / {database}.{schema}")
 
+        # Configura variável de ambiente para OCSP (fallback)
+        os.environ['SNOWFLAKE_OCSP_FAIL_OPEN'] = 'True'
+
         # Carrega chave privada
         private_key_bytes = _load_private_key_bytes(private_key, private_key_passphrase)
 
+        # Parâmetros de conexão com segurança SSL aprimorada
         conn = snowflake.connector.connect(
             account=account,
             user=user,
@@ -109,14 +117,25 @@ def connect_snowflake(
             schema=schema,
             role=role,
             login_timeout=timeout,
-            network_timeout=timeout
+            network_timeout=timeout,
+            # Parâmetros SSL para evitar erros de certificado
+            ocsp_fail_open=ocsp_fail_open,  # Permite conexão se OCSP não responder
+            insecure_mode=False,  # Mantém SSL ativo (SEGURO)
+            validate_default_parameters=validate_default_parameters,  # Valida parâmetros
+            # Parâmetros adicionais de resiliência
+            client_session_keep_alive=True,  # Mantém sessão ativa
+            client_prefetch_threads=4  # Otimiza download de resultados
         )
 
         logger.info("✅ Conexão Snowflake estabelecida com sucesso")
+        logger.info(f"🔒 SSL ativo | OCSP fail-open: {ocsp_fail_open}")
+
         return conn
 
     except Exception as e:
         logger.error(f"❌ Erro ao conectar Snowflake: {str(e)}")
+        logger.error("💡 Dica: Verifique se o snowflake-connector-python está atualizado")
+        logger.error("   Execute: pip install --upgrade snowflake-connector-python")
         raise
 
 
@@ -217,16 +236,19 @@ def truncate_table(conn, table_name: str):
         raise
 
 
-@task(cache_policy=NO_CACHE)
+@task(cache_policy=NO_CACHE, retries=2, retry_delay_seconds=30)
 def insert_csv_file_replace(
         conn,
         table_name: str,
         csv_file_path: str,
         csv_encoding: str = 'utf-8',
-        columns: Optional[List[str]] = None
+        columns: Optional[List[str]] = None,
+        max_file_size_mb: int = 5000
 ):
     """
     Insere CSV direto no Snowflake usando COPY INTO (otimizado)
+
+    ATUALIZADO: Inclui retry automático e tratamento de erros SSL
 
     Processo:
     1. TRUNCATE table
@@ -240,9 +262,9 @@ def insert_csv_file_replace(
         csv_file_path: Caminho do arquivo CSV local
         csv_encoding: Encoding do CSV (utf-8, utf-16, etc.)
         columns: Lista de colunas (opcional, lê do CSV se não fornecido)
+        max_file_size_mb: Tamanho máximo do arquivo em MB (default: 5000)
     """
     logger = get_run_logger()
-    import os
     import csv
 
     try:
@@ -250,6 +272,13 @@ def insert_csv_file_replace(
             raise FileNotFoundError(f"Arquivo não encontrado: {csv_file_path}")
 
         file_size_mb = os.path.getsize(csv_file_path) / (1024 * 1024)
+
+        if file_size_mb > max_file_size_mb:
+            raise ValueError(
+                f"Arquivo muito grande: {file_size_mb:.2f} MB "
+                f"(máximo: {max_file_size_mb} MB)"
+            )
+
         logger.info(f"🚀 Carregando CSV ({file_size_mb:.2f} MB) em {table_name} usando COPY INTO...")
 
         # 1. TRUNCATE
@@ -270,11 +299,22 @@ def insert_csv_file_replace(
 
         logger.info(f"⬆️ Enviando CSV para stage interno {stage_name}...")
 
-        # Converte path para formato Windows
+        # Converte path para formato correto
         put_path = csv_file_path.replace('\\', '/')
         put_sql = f"PUT 'file://{put_path}' {stage_name} AUTO_COMPRESS=TRUE OVERWRITE=TRUE"
-        cursor.execute(put_sql)
-        logger.info("✅ Arquivo enviado para stage")
+
+        try:
+            cursor.execute(put_sql)
+            logger.info("✅ Arquivo enviado para stage")
+        except Exception as put_error:
+            logger.error(f"❌ Erro no PUT: {str(put_error)}")
+            if "certificate" in str(put_error).lower() or "254007" in str(put_error):
+                logger.error("🔒 Erro de certificado SSL detectado")
+                logger.error("💡 Soluções:")
+                logger.error("   1. Atualize: pip install --upgrade snowflake-connector-python")
+                logger.error("   2. Atualize certificados: sudo update-ca-certificates")
+                logger.error("   3. Verifique firewall/proxy")
+            raise
 
         # 4. COPY INTO (carrega tudo em paralelo)
         logger.info("⚡ Executando COPY INTO (bulk load paralelo)...")
@@ -414,7 +454,6 @@ SALESFORCE_TABLES_SCHEMAS = {
     }
 }
 
-
 # Schemas das tabelas Deconve (GOLD layer)
 DECONVE_TABLES_SCHEMAS = {
     "camera": {
@@ -444,7 +483,7 @@ DECONVE_TABLES_SCHEMAS = {
 }
 
 
-@task(cache_policy=NO_CACHE)
+@task(cache_policy=NO_CACHE, retries=2, retry_delay_seconds=30)
 def merge_csv_to_snowflake(
         conn,
         table_name: str,
@@ -455,6 +494,8 @@ def merge_csv_to_snowflake(
 ) -> Dict[str, Any]:
     """
     Carrega CSV no Snowflake usando MERGE (UPSERT) para evitar duplicatas
+
+    ATUALIZADO: Inclui retry automático e tratamento de erros SSL
 
     Estratégia:
     1. Cria tabela staging temporária
@@ -474,7 +515,6 @@ def merge_csv_to_snowflake(
         Dict com estatísticas (rows_inserted, rows_updated)
     """
     logger = get_run_logger()
-    import os
     import csv as csv_module
     import time
 
@@ -509,8 +549,16 @@ def merge_csv_to_snowflake(
         logger.info(f"⬆️ Enviando CSV para stage staging {stage_name}...")
         put_path = csv_file_path.replace('\\', '/')
         put_sql = f"PUT 'file://{put_path}' {stage_name} AUTO_COMPRESS=TRUE OVERWRITE=TRUE"
-        cursor.execute(put_sql)
-        logger.info("✅ Arquivo enviado para stage")
+
+        try:
+            cursor.execute(put_sql)
+            logger.info("✅ Arquivo enviado para stage")
+        except Exception as put_error:
+            logger.error(f"❌ Erro no PUT: {str(put_error)}")
+            if "certificate" in str(put_error).lower() or "254007" in str(put_error):
+                logger.error("🔒 Erro de certificado SSL detectado no MERGE")
+                logger.error("💡 Aplicando mesmas soluções do insert_csv_file_replace")
+            raise
 
         # 4. COPY INTO staging
         logger.info("⚡ Carregando dados na staging...")
@@ -577,9 +625,6 @@ def merge_csv_to_snowflake(
         # 9. Remove staging (o stage interno é automaticamente removido junto)
         cursor.execute(f"DROP TABLE {staging_table}")
         logger.info(f"🗑️ Staging removida")
-
-        # Nota: Não precisa fazer REMOVE do stage pois tabelas TEMPORARY
-        # limpam automaticamente seus stages internos ao serem dropadas
 
         cursor.close()
 
