@@ -437,6 +437,7 @@ def weather_api_to_snowflake(
     dest_database = "AJ_DATALAKEHOUSE_RPA"
     dest_schema = "BRONZE"
 
+    conn = None  # Inicializa conexão como None
     try:
         # Conexão Snowflake
         conn = connect_snowflake(
@@ -469,7 +470,6 @@ def weather_api_to_snowflake(
 
         if not weather_data_list:
             logger.error("❌ Nenhum dado coletado. Encerrando.")
-            close_snowflake_connection(conn)
             raise Exception("Falha ao coletar dados climáticos de todas as cidades")
 
         logger.info(f"✓ Dados coletados de {len(weather_data_list)}/{len(CIDADES)} cidades")
@@ -485,8 +485,6 @@ def weather_api_to_snowflake(
 
         # Insere PREVISÃO (FULL REFRESH)
         forecast_inserted = insert_forecast_weather(conn, dest_database, dest_schema, df_forecast)
-
-        close_snowflake_connection(conn)
 
         # Resumo
         end_time = datetime.now()
@@ -564,6 +562,15 @@ def weather_api_to_snowflake(
 
         raise
 
+    finally:
+        # Garante que a conexão seja fechada mesmo em caso de erro
+        if conn is not None:
+            try:
+                close_snowflake_connection(conn)
+                logger.info("✓ Conexão Snowflake fechada com sucesso")
+            except Exception as close_error:
+                logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
+
 
 if __name__ == "__main__":
     # Execução local para teste
@@ -579,7 +586,7 @@ if __name__ == "__main__":
         schedules=[
             CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
         ],
-        tags=["rpa", "api", "snowflake", "bronze", "weather"],
+        tags=["rpa", "api", "snowflake", "bronze"],
         parameters={},
         description="🌤️ Integração API HGBrasil → Snowflake | Coleta dados climáticos de 5 cidades (Blumenau, Balneário Camboriú, Joinville, São José, Criciúma). Executa a cada hora gerando: (1) Clima Atual em BRZ_CLIMA_TEMPO (APPEND) e (2) Previsão 15 dias em BRZ_CLIMA_TEMPO_PREVISAO (FULL REFRESH).",
         version="1.0.0"
