@@ -76,7 +76,7 @@ def load_proxy_settings() -> Optional[Dict[str, str]]:
         return proxies
 
     except Exception as e:
-        logger.warning(f"⚠ Erro ao carregar proxy blocks: {e}")
+        logger.warning(f"⚠️ Erro ao carregar proxy blocks: {type(e).__name__}")
         logger.warning("Continuando SEM proxy (requisições podem ser bloqueadas pelo Cloudflare)")
         return None
 
@@ -239,7 +239,7 @@ def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Opt
         plate_normalized = validate_and_normalize_plate(plate)
 
         if not plate_normalized:
-            logger.warning(f"[{plate}] ⚠ Formato de placa inválido (não é ABC1234 ou ABC1D23)")
+            logger.warning(f"[{plate}] ⚠️ Formato de placa inválido (não é ABC1234 ou ABC1D23)")
             return {"status": "invalid", "reason": "INVALID_PLATE_FORMAT"}
 
         # Headers para parecer requisição legítima
@@ -273,17 +273,17 @@ def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Opt
 
         # CASO 1: 404 - Placa não encontrada na base Placamaster
         if response.status_code == 404:
-            logger.warning(f"[{plate}] ⚠ 404 - Placa não encontrada (IRRECUPERÁVEL)")
+            logger.warning(f"[{plate}] ⚠️ 404 - Placa não encontrada (IRRECUPERÁVEL)")
             return {"status": "invalid", "reason": "404_NOT_FOUND"}
 
         # CASO 2: 403 - Bloqueio permanente
         if response.status_code == 403:
-            logger.warning(f"[{plate}] ⚠ 403 - Acesso bloqueado permanentemente (IRRECUPERÁVEL)")
+            logger.warning(f"[{plate}] ⚠️ 403 - Acesso bloqueado permanentemente (IRRECUPERÁVEL)")
             return {"status": "invalid", "reason": "403_FORBIDDEN"}
 
         # CASO 3: 500+ - Erros de servidor persistentes
         if response.status_code >= 500:
-            logger.warning(f"[{plate}] ⚠ {response.status_code} - Erro de servidor (IRRECUPERÁVEL)")
+            logger.warning(f"[{plate}] ⚠️ {response.status_code} - Erro de servidor (IRRECUPERÁVEL)")
             return {"status": "invalid", "reason": f"{response.status_code}_SERVER_ERROR"}
 
         # ===== PROCESSAMENTO NORMAL =====
@@ -302,7 +302,7 @@ def query_plate_api(plate: str, proxies: Optional[Dict[str, str]] = None) -> Opt
                     return vehicle_data
                 else:
                     # CASO 4: Dados vazios (success=true mas sem marca/modelo)
-                    logger.warning(f"[{plate}] ⚠ API retornou success mas SEM marca/modelo (IRRECUPERÁVEL)")
+                    logger.warning(f"[{plate}] ⚠️ API retornou success mas SEM marca/modelo (IRRECUPERÁVEL)")
                     return {"status": "invalid", "reason": "EMPTY_DATA"}
             else:
                 logger.warning(f"[{plate}] API retornou success={data.get('success')}, data presente={data.get('data') is not None}")
@@ -401,7 +401,7 @@ def process_plate_batch(plates_info: List[Dict[str, Any]], proxies: Optional[Dic
             if vehicle_data and vehicle_data.get("status") == "invalid":
                 reason = vehicle_data.get("reason", "UNKNOWN")
                 invalid_plates[plate] = reason
-                logger.warning(f"[{plate}] ⚠ IRRECUPERÁVEL: {reason}")
+                logger.warning(f"[{plate}] ⚠️ IRRECUPERÁVEL: {reason}")
                 vehicle_data = None
                 break  # Não faz retry para casos inválidos
 
@@ -457,7 +457,7 @@ def process_plate_batch(plates_info: List[Dict[str, Any]], proxies: Optional[Dic
     if failed_plates:
         logger.warning(f"Erros temporários ({len(failed_plates)}): {', '.join(failed_plates)}")
     if invalid_plates:
-        logger.warning(f"⚠ Placas INVÁLIDAS ({len(invalid_plates)}): {', '.join(invalid_plates.keys())}")
+        logger.warning(f"⚠️ Placas INVÁLIDAS ({len(invalid_plates)}): {', '.join(invalid_plates.keys())}")
     logger.info("=" * 60)
 
     return {
@@ -545,7 +545,7 @@ def update_status_invalid(conn, database, schema, plates_with_reasons: Dict[str,
     cur = conn.cursor()
 
     try:
-        logger.warning(f"⚠ Marcando {len(plates_with_reasons)} placas como INVÁLIDAS (status 'I')")
+        logger.warning(f"⚠️ Marcando {len(plates_with_reasons)} placas como INVÁLIDAS (status 'I')")
 
         rows_updated = 0
 
