@@ -71,6 +71,7 @@ def connect_snowflake(
         private_key_passphrase: Optional[str] = None,
         timeout: int = 60,
         ocsp_fail_open: bool = True,
+        insecure_mode: bool = False,
         validate_default_parameters: bool = True
 ):
     """
@@ -87,6 +88,7 @@ def connect_snowflake(
         private_key_passphrase: Passphrase da chave privada (se criptografada)
         timeout: Timeout de conexão em segundos
         ocsp_fail_open: Permite conexão mesmo se validação OCSP falhar (default: True)
+        insecure_mode: Desabilita SSL (use apenas quando necessário, ex: SFTP) (default: False)
         validate_default_parameters: Valida parâmetros padrão do Snowflake (default: True)
 
     Returns:
@@ -120,7 +122,7 @@ def connect_snowflake(
             network_timeout=timeout,
             # Parâmetros SSL para evitar erros de certificado
             ocsp_fail_open=ocsp_fail_open,  # Permite conexão se OCSP não responder
-            insecure_mode=False,  # Mantém SSL ativo (SEGURO)
+            insecure_mode=insecure_mode,  # Mantém SSL ativo (SEGURO)
             validate_default_parameters=validate_default_parameters,  # Valida parâmetros
             # Parâmetros adicionais de resiliência
             client_session_keep_alive=True,  # Mantém sessão ativa
