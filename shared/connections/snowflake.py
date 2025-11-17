@@ -6,6 +6,26 @@ import snowflake.connector
 from snowflake.connector import DictCursor
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
+import re
+
+
+# Whitelist de identifiers permitidos
+ALLOWED_DATABASES = ['AJ_DATALAKEHOUSE_RPA']
+ALLOWED_SCHEMAS = ['BRONZE', 'GOLD', 'SILVER', 'PUBLIC']
+
+
+def validate_identifier(value: str, allowed: List[str], param_name: str) -> str:
+    """Valida identifier contra whitelist para prevenir SQL injection"""
+    if value not in allowed:
+        raise ValueError(f"Invalid {param_name}: {value}. Allowed: {allowed}")
+    return value
+
+
+def sanitize_identifier(value: str) -> str:
+    """Remove caracteres perigosos de identifiers"""
+    if not re.match(r'^[A-Za-z0-9_]+$', value):
+        raise ValueError(f"Invalid identifier: {value}. Only alphanumeric and underscore allowed")
+    return value
 
 
 def _load_private_key_bytes(private_key_string: str, passphrase: Optional[str] = None):
@@ -71,6 +91,10 @@ def connect_snowflake(
     logger = get_run_logger()
 
     try:
+        # Valida identifiers
+        database = validate_identifier(database, ALLOWED_DATABASES, 'database')
+        schema = validate_identifier(schema, ALLOWED_SCHEMAS, 'schema')
+
         logger.info(f"Conectando ao Snowflake: {account} / {database}.{schema}")
 
         # Carrega chave privada
@@ -85,8 +109,7 @@ def connect_snowflake(
             schema=schema,
             role=role,
             login_timeout=timeout,
-            network_timeout=timeout,
-            insecure_mode=True  # Desabilita validação SSL (necessário em alguns ambientes corporativos/Docker)
+            network_timeout=timeout
         )
 
         logger.info("✅ Conexão Snowflake estabelecida com sucesso")

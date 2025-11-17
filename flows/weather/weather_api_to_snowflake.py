@@ -1,7 +1,7 @@
 import sys
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import urllib3
 
@@ -212,7 +212,7 @@ def process_current_weather(weather_data_list: List[Dict[str, Any]]) -> pd.DataF
             'DS_FASE_LUA': first_forecast['moon_phase'],
             'DS_DESCRICAO_TEMPO': first_forecast['description'],
             'DS_CONDICAO_TEMPO': first_forecast['condition'],
-            'DT_COLETA_API': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'DT_COLETA_API': (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
         })
 
     df = pd.DataFrame(current_records)
