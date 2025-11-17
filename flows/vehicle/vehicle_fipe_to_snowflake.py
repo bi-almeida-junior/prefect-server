@@ -869,6 +869,7 @@ def vehicle_fipe_to_snowflake(
     dest_database = "AJ_DATALAKEHOUSE_RPA"
     dest_schema = "BRONZE"
 
+    conn = None
     try:
         # Buscar tabela de referência FIPE atual
         reference_table_code = get_current_fipe_reference_table()
@@ -889,7 +890,6 @@ def vehicle_fipe_to_snowflake(
 
         if not vehicles:
             logger.info("Nenhum veículo pendente para processar. Encerrando.")
-            close_snowflake_connection(conn)
             return
 
         # Atualiza status para 'P' (processando)
@@ -943,8 +943,6 @@ def vehicle_fipe_to_snowflake(
         if failed_vehicles:
             update_status_error(conn, dest_database, dest_schema, failed_vehicles)
             total_errors += len(failed_vehicles)
-
-        close_snowflake_connection(conn)
 
         # Resumo
         end_time = datetime.now()
@@ -1021,6 +1019,15 @@ def vehicle_fipe_to_snowflake(
             logger.warning(f"Falha ao enviar alerta de erro: {alert_error}")
 
         raise
+
+    finally:
+        # Garante que a conexão seja fechada mesmo em caso de erro
+        if conn is not None:
+            try:
+                close_snowflake_connection(conn)
+                logger.info("✓ Conexão Snowflake fechada com sucesso")
+            except Exception as close_error:
+                logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
 
 
 if __name__ == "__main__":

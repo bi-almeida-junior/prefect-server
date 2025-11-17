@@ -247,6 +247,7 @@ def salesforce_to_snowflake(  # noqa: C901
 
     logger.info(f"📊 Streams: {', '.join(streams_to_process)}")
 
+    snowflake_conn = None
     try:
         # 2. Conecta SFTP
         logger.info(f"🔌 Conectando SFTP: {sftp_host}")
@@ -291,7 +292,6 @@ def salesforce_to_snowflake(  # noqa: C901
 
         # 5. Fecha conexões
         close_sftp_connection(sftp_client, ssh_client)
-        close_snowflake_connection(snowflake_conn)
 
         # 6. Resumo
         logger.info(f"\n{'=' * 80}")
@@ -429,6 +429,15 @@ def salesforce_to_snowflake(  # noqa: C901
                 logger.warning(f"⚠️ Erro ao enviar alerta de erro: {alert_error}")
 
         raise
+
+    finally:
+        # Garante que a conexão seja fechada mesmo em caso de erro
+        if snowflake_conn is not None:
+            try:
+                close_snowflake_connection(snowflake_conn)
+                logger.info("✓ Conexão Snowflake fechada com sucesso")
+            except Exception as close_error:
+                logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
 
 
 # Deployment do flow

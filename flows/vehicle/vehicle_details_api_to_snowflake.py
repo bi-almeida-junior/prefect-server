@@ -688,6 +688,7 @@ def vehicle_details_api_to_snowflake(
     dest_database = "AJ_DATALAKEHOUSE_RPA"
     dest_schema = "BRONZE"
 
+    conn = None  # Inicializa conexão como None
     try:
         # Conexão Snowflake
         conn = connect_snowflake(
@@ -705,7 +706,6 @@ def vehicle_details_api_to_snowflake(
 
         if not plates_info:
             logger.info("Nenhuma placa pendente para processar. Encerrando.")
-            close_snowflake_connection(conn)
             return
 
         # Atualiza status para 'P' (processando)
@@ -749,8 +749,6 @@ def vehicle_details_api_to_snowflake(
                 total_errors += len(failed_plates)
 
             total_processed += len(batch)
-
-        close_snowflake_connection(conn)
 
         # Resumo
         end_time = datetime.now()
@@ -827,6 +825,15 @@ def vehicle_details_api_to_snowflake(
             logger.warning(f"Falha ao enviar alerta de erro: {alert_error}")
 
         raise
+
+    finally:
+        # Garante que a conexão seja fechada mesmo em caso de erro
+        if conn is not None:
+            try:
+                close_snowflake_connection(conn)
+                logger.info("✓ Conexão Snowflake fechada com sucesso")
+            except Exception as close_error:
+                logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
 
 
 if __name__ == "__main__":

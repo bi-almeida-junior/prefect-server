@@ -534,6 +534,7 @@ def besistemas_to_snowflake(
     snowflake_schema = snowflake_schema or os.getenv("SNOWFLAKE_SCHEMA")
     snowflake_role = snowflake_role or os.getenv("SNOWFLAKE_ROLE")
 
+    conn = None
     try:
         # Cliente S3
         logger.info("Criando cliente S3...")
@@ -589,8 +590,6 @@ def besistemas_to_snowflake(
                 results[category] = {'status': 'failed', 'error': str(e), 'todo': len(todo_keys)}
                 import traceback
                 traceback.print_exc()
-
-        close_snowflake_connection(conn)
 
         # Resumo
         end_time = datetime.now()
@@ -712,6 +711,15 @@ def besistemas_to_snowflake(
             logger.warning(f"Falha ao enviar alerta de erro: {alert_error}")
 
         raise
+
+    finally:
+        # Garante que a conexão seja fechada mesmo em caso de erro
+        if conn is not None:
+            try:
+                close_snowflake_connection(conn)
+                logger.info("✓ Conexão Snowflake fechada com sucesso")
+            except Exception as close_error:
+                logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
 
 
 if __name__ == "__main__":

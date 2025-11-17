@@ -381,6 +381,7 @@ def deconve_person_flow_to_snowflake(
         logger.info(f"📁 Diretório temporário: {temp_dir}")
         logger.info(f"📄 Arquivo temporário: {output_filename}")
 
+        snowflake_conn = None
         try:
             # 3. Autentica na API
             logger.info("\n" + "=" * 80)
@@ -475,10 +476,7 @@ def deconve_person_flow_to_snowflake(
             rows_inserted = merge_result.get('rows_inserted', 0)
             rows_updated = merge_result.get('rows_updated', 0)
 
-            # 11. Fecha conexão Snowflake
-            close_snowflake_connection(snowflake_conn)
-
-            # 12. CSV temporário será removido automaticamente ao sair do contexto
+            # 11. CSV temporário será removido automaticamente ao sair do contexto
 
             # 13. Resumo
             logger.info("\n" + "=" * 80)
@@ -611,6 +609,15 @@ def deconve_person_flow_to_snowflake(
                     logger.warning(f"⚠️ Erro ao enviar alerta de erro: {alert_error}")
 
             raise
+
+        finally:
+            # Garante que a conexão seja fechada mesmo em caso de erro
+            if snowflake_conn is not None:
+                try:
+                    close_snowflake_connection(snowflake_conn)
+                    logger.info("✓ Conexão Snowflake fechada com sucesso")
+                except Exception as close_error:
+                    logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
     # Ao sair do with, o diretório temporário é automaticamente excluído
 
 
