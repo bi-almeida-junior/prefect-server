@@ -23,7 +23,7 @@ from shared.alerts import send_flow_success_alert, send_flow_error_alert
 load_dotenv()
 
 # ====== CONFIGURAÇÕES ======
-BATCH_SIZE = 5  # Quantidade de placas por lote (ajustar conforme necessidade)
+BATCH_SIZE = 50  # Quantidade de placas por lote (ajustar conforme necessidade)
 RATE_LIMIT = 5  # Requisições por minuto (limite da API)
 API_URL = "https://placamaster.com/api/consulta-gratuita"
 
