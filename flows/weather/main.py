@@ -1,11 +1,9 @@
 import sys
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict, Any
-import urllib3
 
-import requests
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
@@ -14,19 +12,17 @@ from prefect.artifacts import create_table_artifact
 from prefect.client.schemas.schedules import CronSchedule
 from prefect.blocks.system import Secret
 
-# Imports das conexões compartilhadas
+from flows.weather.client import WeatherAPIClient
+from flows.weather.schemas import parse_api_response, transform_to_snowflake_row
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 from shared.connections.snowflake import connect_snowflake, close_snowflake_connection
-from shared.alerts import send_flow_success_alert, send_flow_error_alert
+from shared.decorators import flow_alerts
 
 # Carrega variáveis de ambiente
 load_dotenv()
 
-# Desabilita warnings de SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 # ====== CONFIGURAÇÕES ======
-BASE_URL = "https://api.hgbrasil.com/weather"
 
 # Mapeamento de cidades com IDs da tabela DIM_CIDADE
 # Não consulta Snowflake - valores fixos conforme solicitado
@@ -68,7 +64,7 @@ def load_api_key() -> Optional[str]:
         api_key_block = Secret.load("hgbrasil-weather-api-key")
         api_key = api_key_block.get()
 
-        logger.info("✓ API Key carregada com sucesso")
+        logger.info("✅ API Key carregada com sucesso")
         return api_key
 
     except Exception as e:
@@ -77,204 +73,58 @@ def load_api_key() -> Optional[str]:
         raise ValueError("Failed to load API key") from e
 
 
-def validate_weather_response(data: dict, cidade: dict) -> Dict[str, Any]:
-    """Valida estrutura e tipos da resposta da API"""
-    if not isinstance(data, dict):
-        raise ValueError("Resposta deve ser dict")
-
-    if not data.get('valid_key'):
-        raise ValueError("API key inválida")
-
-    results = data.get('results')
-    if not isinstance(results, dict):
-        raise ValueError("Campo 'results' ausente ou inválido")
-
-    # Valida campos obrigatórios
-    required = ['city', 'temp', 'humidity', 'forecast']
-    for field in required:
-        if field not in results:
-            raise ValueError(f"Campo obrigatório ausente: {field}")
-
-    # Valida tipos
-    if not isinstance(results['temp'], (int, float)):
-        raise ValueError("Temperatura deve ser numérica")
-
-    if not isinstance(results['forecast'], list):
-        raise ValueError("Forecast deve ser lista")
-
-    return {
-        'id_cidade': cidade['id'],
-        'cidade': str(results['city'])[:255],
-        'latitude': results.get('latitude', results.get('lat')),
-        'longitude': results.get('longitude', results.get('lon')),
-        'temperatura_atual': float(results['temp']),
-        'umidade_atual': int(results['humidity']),
-        'data_coleta': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'previsao_15_dias': results['forecast']
-    }
-
-
 @task(name="fetch_weather_data", log_prints=True, cache_policy=NONE)
-def fetch_weather_data(api_key: str, cidade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Coleta dados climáticos de uma cidade da API HGBrasil.
-
-    Args:
-        api_key: Chave da API HGBrasil
-        cidade: Dict com informações da cidade (id, nome, nome_api)
-
-    Returns:
-        Dict com dados climáticos ou None se falhar
-    """
+def fetch_weather_data(api_key: str, cidade: Dict[str, Any]) -> Optional[tuple]:
+    """Coleta e valida dados climáticos de uma cidade."""
     logger = get_run_logger()
 
     try:
-        cidade_nome = cidade["nome"]
-        cidade_api = cidade["nome_api"]
+        logger.info(f"🌤️  Coletando dados de {cidade['nome']}...")
 
-        logger.info(f"🌤️  Coletando dados de {cidade_nome}...")
+        # Requisição HTTP
+        client = WeatherAPIClient(api_key)
+        raw_data = client.fetch_weather(cidade["nome_api"])
 
-        params = {
-            'key': api_key,
-            'city_name': cidade_api
-        }
-
-        response = requests.get(BASE_URL, params=params, verify=True, timeout=10)
-
-        if response.status_code == 200:
-            data = response.json()
-
-            try:
-                validated = validate_weather_response(data, cidade)
-                logger.info(f"   ✓ Cidade: {validated['cidade']}")
-                logger.info(f"   ✓ Temp: {validated['temperatura_atual']}°C")
-                logger.info(f"   ✓ Previsão: {len(validated['previsao_15_dias'])} dias")
-                return validated
-            except ValueError as ve:
-                logger.error(f"   ❌ Validação falhou: {ve}")
-                return None
-        else:
-            logger.error(f"❌ HTTP {response.status_code} para {cidade_nome}")
+        if not raw_data:
             return None
 
+        # Validação Pydantic
+        api_response = parse_api_response(raw_data)
+        logger.info(f"✅ {api_response.results.city} - {api_response.results.temp}°C - {len(api_response.results.forecast)} dias")
+
+        return (cidade["id"], api_response)
+
     except Exception as e:
-        logger.error(f"❌ Erro ao consultar {cidade.get('nome', 'N/A')}: {type(e).__name__}")
+        logger.error(f"❌ Erro em {cidade['nome']}: {e}")
         return None
 
 
-@task(name="process_current_weather", log_prints=True, cache_policy=NONE)
-def process_current_weather(weather_data_list: List[Dict[str, Any]]) -> pd.DataFrame:
+@task(name="process_weather_data", log_prints=True, cache_policy=NONE)
+def process_weather_data(weather_responses: List[tuple], only_first: bool = False) -> pd.DataFrame:
     """
-    Processa dados climáticos ATUAIS (primeiro registro da resposta).
-
-    Este DataFrame será inserido na tabela BRZ_CLIMA_TEMPO (APPEND ONLY).
-    Registra as condições climáticas no momento da coleta.
+    Processa dados climáticos para Snowflake.
 
     Args:
-        weather_data_list: Lista com dados climáticos coletados
+        weather_responses: Lista de tuplas (cidade_id, WeatherAPIResponse)
+        only_first: True para clima atual (1º dia), False para todos os dias
 
     Returns:
-        DataFrame formatado para inserção em BRZ_CLIMA_TEMPO
+        DataFrame pronto para inserção
     """
     logger = get_run_logger()
+    records = []
 
-    current_records = []
+    for cidade_id, api_response in weather_responses:
+        # Pega apenas primeiro ou todos os dias de previsão
+        forecast_days = api_response.results.forecast[:1] if only_first else api_response.results.forecast
 
-    for weather_data in weather_data_list:
-        if not weather_data or not weather_data.get('previsao_15_dias'):
-            continue
+        for forecast_day in forecast_days:
+            row = transform_to_snowflake_row(cidade_id, api_response.results, forecast_day)
+            records.append(row)
 
-        # IMPORTANTE: Pega APENAS o primeiro registro (hoje - condições atuais)
-        first_forecast = weather_data['previsao_15_dias'][0]
-
-        # Converte data da previsão para formato DATE
-        data_previsao = datetime.strptime(first_forecast['full_date'], '%d/%m/%Y').date()
-
-        current_records.append({
-            'ID_CIDADE': weather_data['id_cidade'],
-            'NR_LATITUDE': str(weather_data['latitude']) if weather_data['latitude'] else None,
-            'NR_LONGITUDE': str(weather_data['longitude']) if weather_data['longitude'] else None,
-            'NR_TEMPERATURA_ATUAL': weather_data['temperatura_atual'],
-            'NR_UMIDADE_ATUAL': weather_data['umidade_atual'],
-            'DT_PREVISAO': data_previsao,
-            'DS_DATA_FORMATADA': first_forecast['date'],
-            'DS_DATA_COMPLETA': first_forecast['full_date'],
-            'DS_DIA_SEMANA': first_forecast['weekday'],
-            'NR_TEMP_MAXIMA': first_forecast['max'],
-            'NR_TEMP_MINIMA': first_forecast['min'],
-            'NR_UMIDADE': first_forecast['humidity'],
-            'NR_NEBULOSIDADE': first_forecast['cloudiness'],
-            'NR_CHUVA_MM': first_forecast['rain'],
-            'NR_PROB_CHUVA': first_forecast['rain_probability'],
-            'DS_VENTO_VELOCIDADE': first_forecast['wind_speedy'],
-            'DS_HORARIO_NASCER_SOL': first_forecast['sunrise'],
-            'DS_HORARIO_POR_SOL': first_forecast['sunset'],
-            'DS_FASE_LUA': first_forecast['moon_phase'],
-            'DS_DESCRICAO_TEMPO': first_forecast['description'],
-            'DS_CONDICAO_TEMPO': first_forecast['condition'],
-            'DT_COLETA_API': (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
-        })
-
-    df = pd.DataFrame(current_records)
-    logger.info(f"✓ Processados {len(df)} registros de clima ATUAL")
-
-    return df
-
-
-@task(name="process_forecast_weather", log_prints=True, cache_policy=NONE)
-def process_forecast_weather(weather_data_list: List[Dict[str, Any]]) -> pd.DataFrame:
-    """
-    Processa dados de PREVISÃO (todos os 15 dias).
-
-    Este DataFrame será inserido na tabela BRZ_CLIMA_TEMPO_PREVISAO (FULL REFRESH).
-    Contém a previsão dos próximos dias.
-
-    Args:
-        weather_data_list: Lista com dados climáticos coletados
-
-    Returns:
-        DataFrame formatado para inserção em BRZ_CLIMA_TEMPO_PREVISAO
-    """
-    logger = get_run_logger()
-
-    forecast_records = []
-
-    for weather_data in weather_data_list:
-        if not weather_data or not weather_data.get('previsao_15_dias'):
-            continue
-
-        # IMPORTANTE: Processa TODOS os registros de previsão (15 dias)
-        for forecast_day in weather_data['previsao_15_dias']:
-            # Converte data da previsão para formato DATE
-            data_previsao = datetime.strptime(forecast_day['full_date'], '%d/%m/%Y').date()
-
-            forecast_records.append({
-                'ID_CIDADE': weather_data['id_cidade'],
-                'NR_LATITUDE': str(weather_data['latitude']) if weather_data['latitude'] else None,
-                'NR_LONGITUDE': str(weather_data['longitude']) if weather_data['longitude'] else None,
-                'NR_TEMPERATURA_ATUAL': weather_data['temperatura_atual'],
-                'NR_UMIDADE_ATUAL': weather_data['umidade_atual'],
-                'DT_PREVISAO': data_previsao,
-                'DS_DATA_FORMATADA': forecast_day['date'],
-                'DS_DATA_COMPLETA': forecast_day['full_date'],
-                'DS_DIA_SEMANA': forecast_day['weekday'],
-                'NR_TEMP_MAXIMA': forecast_day['max'],
-                'NR_TEMP_MINIMA': forecast_day['min'],
-                'NR_UMIDADE': forecast_day['humidity'],
-                'NR_NEBULOSIDADE': forecast_day['cloudiness'],
-                'NR_CHUVA_MM': forecast_day['rain'],
-                'NR_PROB_CHUVA': forecast_day['rain_probability'],
-                'DS_VENTO_VELOCIDADE': forecast_day['wind_speedy'],
-                'DS_HORARIO_NASCER_SOL': forecast_day['sunrise'],
-                'DS_HORARIO_POR_SOL': forecast_day['sunset'],
-                'DS_FASE_LUA': forecast_day['moon_phase'],
-                'DS_DESCRICAO_TEMPO': forecast_day['description'],
-                'DS_CONDICAO_TEMPO': forecast_day['condition'],
-                'DT_COLETA_API': (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
-            })
-
-    df = pd.DataFrame(forecast_records)
-    logger.info(f"✓ Processados {len(df)} registros de PREVISÃO (15 dias x {len(weather_data_list)} cidades)")
+    df = pd.DataFrame(records)
+    tipo = "ATUAL" if only_first else "PREVISÃO"
+    logger.info(f"✅ Processados {len(df)} registros de {tipo}")
 
     return df
 
@@ -337,7 +187,7 @@ def insert_current_weather(conn, database: str, schema: str, df: pd.DataFrame) -
         rows_inserted = cursor.rowcount
         conn.commit()
 
-        logger.info(f"✓ {rows_inserted} registros de clima atual inseridos com sucesso")
+        logger.info(f"✅ {rows_inserted} registros de clima atual inseridos com sucesso")
         return rows_inserted
 
     except Exception as e:
@@ -378,7 +228,7 @@ def insert_forecast_weather(conn, database: str, schema: str, df: pd.DataFrame) 
         truncate_sql = f"TRUNCATE TABLE {database}.{schema}.BRZ_CLIMA_TEMPO_PREVISAO"
         cursor.execute(truncate_sql)
         conn.commit()
-        logger.info("✓ Tabela truncada com sucesso")
+        logger.info("✅ Tabela truncada com sucesso")
 
         # INSERT - Insere novos dados
         logger.info(f"📊 Inserindo {len(df)} registros em {database}.{schema}.BRZ_CLIMA_TEMPO_PREVISAO (FULL REFRESH)...")
@@ -413,7 +263,7 @@ def insert_forecast_weather(conn, database: str, schema: str, df: pd.DataFrame) 
         rows_inserted = cursor.rowcount
         conn.commit()
 
-        logger.info(f"✓ {rows_inserted} registros de previsão inseridos com sucesso")
+        logger.info(f"✅ {rows_inserted} registros de previsão inseridos com sucesso")
         return rows_inserted
 
     except Exception as e:
@@ -424,7 +274,16 @@ def insert_forecast_weather(conn, database: str, schema: str, df: pd.DataFrame) 
 
 
 @flow(name="weather_api_to_snowflake", log_prints=True)
-def weather_api_to_snowflake(
+@flow_alerts(
+    flow_name="Clima HGBrasil",
+    source="API HGBrasil Weather",
+    destination="Snowflake (BRONZE)",
+    extract_summary=lambda result: {
+        "cities_processed": result.get("cities_processed", 0),
+        "records_loaded": result.get("current_inserted", 0) + result.get("forecast_inserted", 0)
+    }
+)
+def main(
         snowflake_account: Optional[str] = None,
         snowflake_user: Optional[str] = None,
         snowflake_private_key: Optional[str] = None,
@@ -498,18 +357,14 @@ def weather_api_to_snowflake(
             logger.error("❌ Nenhum dado coletado. Encerrando.")
             raise Exception("Falha ao coletar dados climáticos de todas as cidades")
 
-        logger.info(f"✓ Dados coletados de {len(weather_data_list)}/{len(CIDADES)} cidades")
+        logger.info(f"✅ Dados coletados de {len(weather_data_list)}/{len(CIDADES)} cidades")
 
-        # Processa dados de clima ATUAL (primeiro registro)
-        df_current = process_current_weather(weather_data_list)
-
-        # Processa dados de PREVISÃO (todos os 15 dias)
-        df_forecast = process_forecast_weather(weather_data_list)
-
-        # Insere clima ATUAL (APPEND)
+        # Processa e insere clima ATUAL (apenas 1º dia)
+        df_current = process_weather_data(weather_data_list, only_first=True)
         current_inserted = insert_current_weather(conn, dest_database, dest_schema, df_current)
 
-        # Insere PREVISÃO (FULL REFRESH)
+        # Processa e insere PREVISÃO (todos os 15 dias)
+        df_forecast = process_weather_data(weather_data_list, only_first=False)
         forecast_inserted = insert_forecast_weather(conn, dest_database, dest_schema, df_forecast)
 
         # Resumo
@@ -518,7 +373,7 @@ def weather_api_to_snowflake(
         m, s = divmod(elapsed.total_seconds(), 60)
 
         logger.info("=" * 80)
-        logger.info("✓ PROCESSO CONCLUÍDO COM SUCESSO")
+        logger.info("✅ PROCESSO CONCLUÍDO COM SUCESSO")
         logger.info("=" * 80)
         logger.info(f"Database: {dest_database}")
         logger.info(f"Schema:   {dest_schema}")
@@ -552,40 +407,17 @@ def weather_api_to_snowflake(
         except Exception as e:
             logger.warning(f"Erro criando artifact: {e}")
 
-        # # Alerta de sucesso
-        # try:
-        #     send_flow_success_alert(
-        #         flow_name="Clima HGBrasil",
-        #         source="API HGBrasil Weather",
-        #         destination="Snowflake",
-        #         summary={
-        #             "cities_processed": len(weather_data_list),
-        #             "current_weather_records": current_inserted,
-        #             "forecast_records": forecast_inserted
-        #         },
-        #         duration_seconds=elapsed.total_seconds()
-        #     )
-        # except Exception as e:
-        #     logger.warning(f"Falha ao enviar alerta de sucesso: {e}")
+        # Retorna resumo para o decorador @flow_alerts
+        return {
+            "cities_processed": len(weather_data_list),
+            "current_inserted": current_inserted,
+            "forecast_inserted": forecast_inserted
+        }
 
     except Exception as e:
         logger.error(f"❌ Erro no flow: {e}")
         import traceback
         traceback.print_exc()
-
-        # Alerta de erro
-        try:
-            elapsed_error = (datetime.now() - start_time).total_seconds()
-            send_flow_error_alert(
-                flow_name="Clima HGBrasil",
-                source="API HGBrasil Weather",
-                destination="Snowflake",
-                error_message=str(e),
-                duration_seconds=elapsed_error
-            )
-        except Exception as alert_error:
-            logger.warning(f"Falha ao enviar alerta de erro: {alert_error}")
-
         raise
 
     finally:
@@ -593,19 +425,19 @@ def weather_api_to_snowflake(
         if conn is not None:
             try:
                 close_snowflake_connection(conn)
-                logger.info("✓ Conexão Snowflake fechada com sucesso")
+                logger.info("✅ Conexão Snowflake fechada com sucesso")
             except Exception as close_error:
                 logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
 
 
 if __name__ == "__main__":
     # Execução local para teste
-    # weather_api_to_snowflake()
+    # main()
 
     # Deployment para execução agendada
-    weather_api_to_snowflake.from_source(
+    main.from_source(
         source=".",
-        entrypoint="flows/weather/weather_api_to_snowflake.py:weather_api_to_snowflake"
+        entrypoint="flows/weather/main.py:main"
     ).deploy(
         name="weather-api-to-snowflake",
         work_pool_name="local-pool",
