@@ -1,10 +1,7 @@
-"""
-Schemas Pydantic para validação de dados da API HGBrasil Weather.
-"""
-
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
+from shared.utils import get_datetime_brasilia
 
 
 class ForecastDay(BaseModel):
@@ -92,11 +89,7 @@ def parse_api_response(raw_data: dict) -> WeatherAPIResponse:
         raise ValueError(f"Erro ao validar resposta da API: {e}") from e
 
 
-def transform_to_snowflake_row(
-    cidade_id: int,
-    results: WeatherResults,
-    forecast_day: ForecastDay
-) -> Dict[str, Any]:
+def transform_to_snowflake_row(cidade_id: int, results: WeatherResults, forecast_day: ForecastDay) -> Dict[str, Any]:
     """
     Transforma dados da API para formato Snowflake.
 
@@ -108,7 +101,7 @@ def transform_to_snowflake_row(
     Returns:
         Dict pronto para inserção no Snowflake
     """
-    data_previsao = datetime.strptime(forecast_day.full_date, '%d/%m/%Y').date()
+    forecast_date = datetime.strptime(forecast_day.full_date, '%d/%m/%Y').date()
 
     return {
         'ID_CIDADE': cidade_id,
@@ -116,7 +109,7 @@ def transform_to_snowflake_row(
         'NR_LONGITUDE': results.longitude,
         'NR_TEMPERATURA_ATUAL': results.temp,
         'NR_UMIDADE_ATUAL': results.humidity,
-        'DT_PREVISAO': data_previsao,
+        'DT_PREVISAO': forecast_date,
         'DS_DATA_FORMATADA': forecast_day.date,
         'DS_DATA_COMPLETA': forecast_day.full_date,
         'DS_DIA_SEMANA': forecast_day.weekday,
@@ -132,5 +125,5 @@ def transform_to_snowflake_row(
         'DS_FASE_LUA': forecast_day.moon_phase,
         'DS_DESCRICAO_TEMPO': forecast_day.description,
         'DS_CONDICAO_TEMPO': forecast_day.condition,
-        'DT_COLETA_API': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'DT_COLETA_API': get_datetime_brasilia()
     }
