@@ -564,7 +564,8 @@ def besistemas_to_snowflake(
             warehouse=snowflake_warehouse,
             database=snowflake_database,
             schema=snowflake_schema,
-            role=snowflake_role
+            role=snowflake_role,
+            insecure_mode=True
         )
 
         # Manifesto
