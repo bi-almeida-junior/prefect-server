@@ -167,6 +167,26 @@ def fetch_people_counter_data_with_pagination(
     return all_items
 
 
+def convert_utc_to_brasilia(utc_timestamp: str) -> str:
+    """
+    Converte timestamp UTC para horário de Brasília (UTC-3)
+
+    Args:
+        utc_timestamp: String no formato ISO com Z (ex: 2025-11-14T03:00:00Z)
+
+    Returns:
+        String no formato YYYY-MM-DD HH:MM:SS em horário de Brasília
+    """
+    # Parse do timestamp UTC (remover .000 se existir e o Z)
+    utc_str = utc_timestamp.replace('Z', '').split('.')[0]
+    dt_utc = datetime.fromisoformat(utc_str)
+
+    # Converter para Brasília (subtrair 3 horas)
+    dt_brasilia = dt_utc - timedelta(hours=3)
+
+    return dt_brasilia.strftime("%Y-%m-%d %H:%M:%S")
+
+
 @task(cache_policy=NO_CACHE)
 def process_cameras_and_save_csv(
         access_token: str,
@@ -240,7 +260,7 @@ def process_cameras_and_save_csv(
 
                         writer.writerow({
                             'ID_CAMERA': camera_id,
-                            'DT_FLUXO': created_at,
+                            'DT_FLUXO': convert_utc_to_brasilia(created_at),
                             'NR_ENTRADA': nr_entrada,
                             'NR_SAIDA': nr_saida,
                             'DT_CRIACAO': dt_criacao
@@ -277,7 +297,7 @@ def process_cameras_and_save_csv(
 def deconve_person_flow_to_snowflake(
         # Deconve params
         api_key: Optional[str] = None,
-        days_back: int = 3,  # Processa últimos 3 dias por padrão (retroativo)
+        days_back: int = 48,  # Processa últimos 3 dias por padrão (retroativo)
         start_date: Optional[str] = None,  # Permite override manual
         end_date: Optional[str] = None,  # Permite override manual
         group_by: str = "hour",
