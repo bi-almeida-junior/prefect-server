@@ -10,7 +10,6 @@ from prefect import task, flow, get_run_logger
 from prefect.cache_policies import NONE
 from prefect.artifacts import create_table_artifact
 from prefect.client.schemas.schedules import CronSchedule
-from prefect.blocks.system import Secret
 
 from flows.weather.client import WeatherAPIClient
 from flows.weather.schemas import parse_api_response, transform_to_snowflake_row
@@ -18,6 +17,7 @@ from flows.weather.schemas import parse_api_response, transform_to_snowflake_row
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 from shared.connections.snowflake import connect_snowflake, close_snowflake_connection
 from shared.decorators import flow_alerts
+from shared.utils import load_secret
 
 # Carrega variáveis de ambiente
 load_dotenv()
@@ -57,20 +57,7 @@ def load_api_key() -> Optional[str]:
     Returns:
         String com a API Key ou None se falhar
     """
-    logger = get_run_logger()
-    try:
-        logger.info("🔐 Carregando API Key do HGBrasil do Prefect Blocks...")
-
-        api_key_block = Secret.load("hgbrasil-weather-api-key")
-        api_key = api_key_block.get()
-
-        logger.info("✅ API Key carregada com sucesso")
-        return api_key
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao carregar API Key: {type(e).__name__}")
-        logger.error("Certifique-se de que o secret 'hgbrasil-weather-api-key' existe no Prefect")
-        raise ValueError("Failed to load API key") from e
+    return load_secret("hgbrasil-weather-api-key")
 
 
 @task(name="fetch_weather_data", log_prints=True, cache_policy=NONE)
