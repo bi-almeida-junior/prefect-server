@@ -462,7 +462,8 @@ def deconve_person_flow_to_snowflake(
                 schema=snowflake_schema,
                 role=snowflake_role,
                 private_key_passphrase=snowflake_private_key_passphrase,
-                timeout=60
+                timeout=60,
+                insecure_mode=True
             )
 
             # 8. Obtém schema da tabela
