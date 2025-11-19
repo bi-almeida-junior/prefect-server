@@ -13,6 +13,7 @@ from flows.vehicle.client import PlacaAPIClient
 from flows.vehicle.schemas import PlateRecord, transform_plate_to_snowflake_row
 from shared.connections.snowflake import snowflake_connection
 from shared.decorators import flow_alerts
+from shared.utils import get_datetime_brasilia
 
 load_dotenv()
 
@@ -78,7 +79,7 @@ def get_pending_plates(conn, batch_size: int) -> List[PlateRecord]:
 
 
 @task(name="update_status", log_prints=True, cache_policy=NONE)
-def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[str, str]] = None) -> int:
+def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[str, str]] = None, update_collection_date: bool = False) -> int:
     """Atualiza status de placas."""
     logger = get_run_logger()
 
@@ -94,20 +95,38 @@ def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[s
         if reasons:
             # Atualiza com motivo (para status 'I')
             for plate in plates:
-                cur.execute(f"""
-                    UPDATE {full_table}
-                    SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s
-                    WHERE DS_PLACA = %s
-                """, (status, reasons.get(plate, 'UNKNOWN'), plate))
+                if update_collection_date:
+                    cur.execute(f"""
+                        UPDATE {full_table}
+                        SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s,
+                            NR_TENTATIVAS = NR_TENTATIVAS + 1,
+                            DT_COLETA = %s
+                        WHERE DS_PLACA = %s
+                    """, (status, reasons.get(plate, 'UNKNOWN'), get_datetime_brasilia(), plate))
+                else:
+                    cur.execute(f"""
+                        UPDATE {full_table}
+                        SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s
+                        WHERE DS_PLACA = %s
+                    """, (status, reasons.get(plate, 'UNKNOWN'), plate))
                 rows_updated += cur.rowcount
         else:
             # Atualiza sem motivo
             placeholders = ','.join(['%s'] * len(plates))
-            cur.execute(f"""
-                UPDATE {full_table}
-                SET DS_STATUS = %s
-                WHERE DS_PLACA IN ({placeholders})
-            """, [status] + plates)
+            if update_collection_date:
+                cur.execute(f"""
+                    UPDATE {full_table}
+                    SET DS_STATUS = %s,
+                        NR_TENTATIVAS = NR_TENTATIVAS + 1,
+                        DT_COLETA = %s
+                    WHERE DS_PLACA IN ({placeholders})
+                """, [status, get_datetime_brasilia()] + plates)
+            else:
+                cur.execute(f"""
+                    UPDATE {full_table}
+                    SET DS_STATUS = %s
+                    WHERE DS_PLACA IN ({placeholders})
+                """, [status] + plates)
             rows_updated = cur.rowcount
 
         conn.commit()
@@ -248,8 +267,8 @@ def main(batch_size: int = BATCH_SIZE):
             logger.info("Nenhuma placa pendente")
             return {"inserted": 0}
 
-        # Atualiza para 'P'
-        update_status(conn, [p.plate for p in plates], 'P')
+        # Atualiza para 'P' e registra tentativa
+        update_status(conn, [p.plate for p in plates], 'P', update_collection_date=True)
 
         # Processa
         result = process_plates(plates, client)
@@ -261,14 +280,14 @@ def main(batch_size: int = BATCH_SIZE):
         inserted = 0
         if not df.empty:
             inserted = insert_plate_data(conn, df)
-            # Atualiza para 'S'
+            # Atualiza para 'S' (não incrementa tentativas novamente)
             update_status(conn, df['DS_PLACA'].tolist(), 'S')
 
-        # Atualiza inválidos
+        # Atualiza inválidos (não incrementa tentativas novamente)
         if invalid:
             update_status(conn, list(invalid.keys()), 'I', invalid)
 
-        # Atualiza erros
+        # Atualiza erros (não incrementa tentativas novamente)
         if failed:
             update_status(conn, failed, 'E')
 
@@ -287,7 +306,7 @@ if __name__ == "__main__":
 
     main.from_source(
         source=".",
-        entrypoint="flows/vehicle/details_to_snowflake.py:main"
+        entrypoint="flows/vehicle/main_details.py:main"
     ).deploy(
         name="vehicle-details-api-to-snowflake",
         work_pool_name="local-pool",
