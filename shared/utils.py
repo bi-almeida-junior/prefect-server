@@ -1,5 +1,3 @@
-"""Funções utilitárias compartilhadas."""
-
 from datetime import datetime, timedelta
 from typing import Optional
 from prefect.blocks.system import Secret
@@ -14,7 +12,7 @@ def get_datetime_brasilia() -> str:
         str: Data/hora formatada como 'YYYY-MM-DD HH:MM:SS'
 
     Example:
-        >>> get_datetime_brasilia()
+        get_datetime_brasilia()
         '2025-11-18 14:30:00'
     """
     return (datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
@@ -34,8 +32,8 @@ def load_secret(secret_name: str) -> Optional[str]:
         ValueError: Se o secret não existir ou houver erro ao carregar
 
     Example:
-        >>> api_key = load_secret("hgbrasil-weather-api-key")
-        >>> db_password = load_secret("database-password")
+        api_key = load_secret("hgbrasil-weather-api-key")
+        db_password = load_secret("database-password")
     """
     logger = get_run_logger()
     try:
