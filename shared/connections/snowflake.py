@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+from contextlib import contextmanager
 from prefect import task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
@@ -413,6 +414,66 @@ def close_snowflake_connection(conn):
         logger.info("✅ Conexão Snowflake fechada com sucesso")
     except Exception as e:
         logger.warning(f"⚠️ Aviso ao fechar conexão: {str(e)}")
+
+
+@contextmanager
+def snowflake_connection(
+    account: Optional[str] = None,
+    user: Optional[str] = None,
+    private_key: Optional[str] = None,
+    warehouse: Optional[str] = None,
+    database: str = "AJ_DATALAKEHOUSE_RPA",
+    schema: str = "BRONZE",
+    role: Optional[str] = None
+):
+    """
+    Context manager para conexão Snowflake com yield.
+
+    Usage:
+        with snowflake_connection(...) as conn:
+            # trabalha com conn
+            ...
+        # conn é fechada automaticamente
+
+    Args:
+        account: Conta Snowflake (ou usa env)
+        user: Usuário (ou usa env)
+        private_key: Chave privada (ou usa env)
+        warehouse: Warehouse (ou usa env)
+        database: Database
+        schema: Schema
+        role: Role
+
+    Yields:
+        Conexão Snowflake ativa
+    """
+    logger = get_run_logger()
+
+    # Carrega de env se não fornecido
+    account = account or os.getenv("SNOWFLAKE_ACCOUNT")
+    user = user or os.getenv("SNOWFLAKE_USER")
+    private_key = private_key or os.getenv("SNOWFLAKE_PRIVATE_KEY")
+    warehouse = warehouse or os.getenv("SNOWFLAKE_WAREHOUSE")
+    role = role or os.getenv("SNOWFLAKE_ROLE")
+
+    conn = None
+    try:
+        conn = connect_snowflake(
+            account=account,
+            user=user,
+            private_key=private_key,
+            warehouse=warehouse,
+            database=database,
+            schema=schema,
+            role=role
+        )
+        yield conn
+    finally:
+        if conn:
+            try:
+                close_snowflake_connection(conn)
+            except Exception as e:
+                logger.warning(f"Erro ao fechar conexão: {e}")
 
 
 # Schemas das tabelas com prefixo BRZ_SALESFORCE_

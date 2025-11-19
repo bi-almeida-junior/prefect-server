@@ -1,5 +1,3 @@
-import sys
-import os
 import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -7,15 +5,13 @@ from typing import Optional, List, Dict, Any
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
-from prefect.cache_policies import NONE
 from prefect.artifacts import create_table_artifact
+from prefect.cache_policies import NONE
 from prefect.client.schemas.schedules import CronSchedule
 
 from flows.weather.client import WeatherAPIClient
 from flows.weather.schemas import parse_api_response, transform_to_snowflake_row
-
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-from shared.connections.snowflake import connect_snowflake, close_snowflake_connection
+from shared.connections.snowflake import snowflake_connection
 from shared.decorators import flow_alerts
 from shared.utils import load_secret
 
@@ -24,14 +20,24 @@ load_dotenv()
 
 # ====== CONFIGURAÇÕES ======
 
-# Mapeamento de cidades com IDs da tabela DIM_CIDADE
-# Não consulta Snowflake - valores fixos conforme solicitado
+# Snowflake
+DATABASE = "AJ_DATALAKEHOUSE_RPA"
+SCHEMA = "BRONZE"
+
+# Mapeamento de cidades com IDs da tabela AJ_DATALAKEHOUSE_RPA.SILVER.DIM_CIDADE
 CIDADES = [
-    {"id": 1, "nome": "Blumenau", "nome_api": "Blumenau,SC"},
-    {"id": 2, "nome": "Balneário Camboriú", "nome_api": "Balneário Camboriú,SC"},
-    {"id": 3, "nome": "Joinville", "nome_api": "Joinville,SC"},
-    {"id": 4, "nome": "São José", "nome_api": "São José,SC"},
-    {"id": 5, "nome": "Criciúma", "nome_api": "Criciúma,SC"}
+    {"id": 1, "name": "Blumenau", "api_name": "Blumenau,SC"},
+    {"id": 2, "name": "Balneário Camboriú", "api_name": "Balneário Camboriú,SC"},
+    {"id": 3, "name": "Joinville", "api_name": "Joinville,SC"},
+    {"id": 4, "name": "São José", "api_name": "São José,SC"},
+    {"id": 5, "name": "Criciúma", "api_name": "Criciúma,SC"}
+]
+
+# Colunas das tabelas de clima
+WEATHER_COLUMNS = [
+    'ID_CIDADE', 'NR_LATITUDE', 'NR_LONGITUDE', 'NR_TEMPERATURA_ATUAL', 'NR_UMIDADE_ATUAL', 'DT_PREVISAO', 'DS_DATA_FORMATADA', 'DS_DATA_COMPLETA',
+    'DS_DIA_SEMANA', 'NR_TEMP_MAXIMA', 'NR_TEMP_MINIMA', 'NR_UMIDADE', 'NR_NEBULOSIDADE', 'NR_CHUVA_MM', 'NR_PROB_CHUVA', 'DS_VENTO_VELOCIDADE',
+    'DS_HORARIO_NASCER_SOL', 'DS_HORARIO_POR_SOL', 'DS_FASE_LUA', 'DS_DESCRICAO_TEMPO', 'DS_CONDICAO_TEMPO', 'DT_COLETA_API'
 ]
 
 
@@ -61,16 +67,15 @@ def load_api_key() -> Optional[str]:
 
 
 @task(name="fetch_weather_data", log_prints=True, cache_policy=NONE)
-def fetch_weather_data(api_key: str, cidade: Dict[str, Any]) -> Optional[tuple]:
+def fetch_weather_data(client: WeatherAPIClient, cidade: Dict[str, Any]) -> Optional[tuple]:
     """Coleta e valida dados climáticos de uma cidade."""
     logger = get_run_logger()
 
     try:
-        logger.info(f"🌤️  Coletando dados de {cidade['nome']}...")
+        logger.info(f"🌤️  Coletando dados de {cidade['name']}...")
 
         # Requisição HTTP
-        client = WeatherAPIClient(api_key)
-        raw_data = client.fetch_weather(cidade["nome_api"])
+        raw_data = client.fetch_weather(cidade["api_name"])
 
         if not raw_data:
             return None
@@ -79,10 +84,10 @@ def fetch_weather_data(api_key: str, cidade: Dict[str, Any]) -> Optional[tuple]:
         api_response = parse_api_response(raw_data)
         logger.info(f"✅ {api_response.results.city} - {api_response.results.temp}°C - {len(api_response.results.forecast)} dias")
 
-        return (cidade["id"], api_response)
+        return cidade["id"], api_response
 
     except Exception as e:
-        logger.error(f"❌ Erro em {cidade['nome']}: {e}")
+        logger.error(f"❌ Erro em {cidade['name']}: {e}")
         return None
 
 
@@ -116,19 +121,16 @@ def process_weather_data(weather_responses: List[tuple], only_first: bool = Fals
     return df
 
 
-@task(name="insert_current_weather", log_prints=True, cache_policy=NONE)
-def insert_current_weather(conn, database: str, schema: str, df: pd.DataFrame) -> int:
+@task(name="insert_weather_data", log_prints=True, cache_policy=NONE)
+def insert_weather_data(conn, table_name: str, df: pd.DataFrame, truncate: bool = False) -> int:
     """
-    Insere dados de clima ATUAL no Snowflake (APPEND ONLY).
-
-    Tabela: BRZ_CLIMA_TEMPO
-    Estratégia: INSERT simples (acumula histórico)
+    Insere dados climáticos no Snowflake.
 
     Args:
         conn: Conexão Snowflake
-        database: Database
-        schema: Schema
+        table_name: Nome da tabela (BRZ_CLIMA_TEMPO ou BRZ_CLIMA_TEMPO_PREVISAO)
         df: DataFrame com dados a inserir
+        truncate: Se True, executa TRUNCATE antes do INSERT
 
     Returns:
         Número de registros inseridos
@@ -136,125 +138,39 @@ def insert_current_weather(conn, database: str, schema: str, df: pd.DataFrame) -
     logger = get_run_logger()
 
     if df.empty:
-        logger.info("Nenhum dado de clima atual para inserir")
+        logger.info(f"Nenhum dado para inserir em {table_name}")
         return 0
 
     cursor = conn.cursor()
+    full_table = f"{DATABASE}.{SCHEMA}.{table_name}"
 
     try:
-        logger.info(f"📊 Inserindo {len(df)} registros em {database}.{schema}.BRZ_CLIMA_TEMPO (APPEND)...")
+        # TRUNCATE se solicitado
+        if truncate:
+            logger.info(f"🗑️  Limpando dados anteriores de {full_table}...")
+            cursor.execute(f"TRUNCATE TABLE {full_table}")
+            conn.commit()
+            logger.info("✅ Tabela truncada")
 
-        insert_sql = f"""
-        INSERT INTO {database}.{schema}.BRZ_CLIMA_TEMPO
-            (ID_CIDADE, NR_LATITUDE, NR_LONGITUDE, NR_TEMPERATURA_ATUAL, NR_UMIDADE_ATUAL,
-             DT_PREVISAO, DS_DATA_FORMATADA, DS_DATA_COMPLETA, DS_DIA_SEMANA,
-             NR_TEMP_MAXIMA, NR_TEMP_MINIMA, NR_UMIDADE, NR_NEBULOSIDADE,
-             NR_CHUVA_MM, NR_PROB_CHUVA, DS_VENTO_VELOCIDADE,
-             DS_HORARIO_NASCER_SOL, DS_HORARIO_POR_SOL, DS_FASE_LUA,
-             DS_DESCRICAO_TEMPO, DS_CONDICAO_TEMPO, DT_COLETA_API)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
+        # INSERT
+        strategy = "FULL REFRESH" if truncate else "APPEND"
+        logger.info(f"📊 Inserindo {len(df)} registros em {full_table} ({strategy})...")
 
-        records = [
-            (
-                row['ID_CIDADE'], row['NR_LATITUDE'], row['NR_LONGITUDE'],
-                row['NR_TEMPERATURA_ATUAL'], row['NR_UMIDADE_ATUAL'],
-                row['DT_PREVISAO'], row['DS_DATA_FORMATADA'], row['DS_DATA_COMPLETA'],
-                row['DS_DIA_SEMANA'], row['NR_TEMP_MAXIMA'], row['NR_TEMP_MINIMA'],
-                row['NR_UMIDADE'], row['NR_NEBULOSIDADE'], row['NR_CHUVA_MM'],
-                row['NR_PROB_CHUVA'], row['DS_VENTO_VELOCIDADE'],
-                row['DS_HORARIO_NASCER_SOL'], row['DS_HORARIO_POR_SOL'],
-                row['DS_FASE_LUA'], row['DS_DESCRICAO_TEMPO'],
-                row['DS_CONDICAO_TEMPO'], row['DT_COLETA_API']
-            )
-            for _, row in df.iterrows()
-        ]
+        columns_list = ", ".join(WEATHER_COLUMNS)
+        placeholders = ", ".join(["%s"] * len(WEATHER_COLUMNS))
+        insert_sql = f"INSERT INTO {full_table} ({columns_list}) VALUES ({placeholders})"
+
+        records = [tuple(row[col] for col in WEATHER_COLUMNS) for _, row in df.iterrows()]
 
         cursor.executemany(insert_sql, records)
         rows_inserted = cursor.rowcount
         conn.commit()
 
-        logger.info(f"✅ {rows_inserted} registros de clima atual inseridos com sucesso")
+        logger.info(f"✅ {rows_inserted} registros inseridos com sucesso")
         return rows_inserted
 
     except Exception as e:
-        logger.error(f"❌ Erro ao inserir dados de clima atual: {e}")
-        raise
-    finally:
-        cursor.close()
-
-
-@task(name="insert_forecast_weather", log_prints=True, cache_policy=NONE)
-def insert_forecast_weather(conn, database: str, schema: str, df: pd.DataFrame) -> int:
-    """
-    Insere dados de PREVISÃO no Snowflake (FULL REFRESH).
-
-    Tabela: BRZ_CLIMA_TEMPO_PREVISAO
-    Estratégia: TRUNCATE + INSERT (sempre sobrescreve com dados mais recentes)
-
-    Args:
-        conn: Conexão Snowflake
-        database: Database
-        schema: Schema
-        df: DataFrame com dados a inserir
-
-    Returns:
-        Número de registros inseridos
-    """
-    logger = get_run_logger()
-
-    if df.empty:
-        logger.info("Nenhum dado de previsão para inserir")
-        return 0
-
-    cursor = conn.cursor()
-
-    try:
-        # TRUNCATE - Remove todos os dados anteriores
-        logger.info(f"🗑️  Limpando dados anteriores de {database}.{schema}.BRZ_CLIMA_TEMPO_PREVISAO...")
-        truncate_sql = f"TRUNCATE TABLE {database}.{schema}.BRZ_CLIMA_TEMPO_PREVISAO"
-        cursor.execute(truncate_sql)
-        conn.commit()
-        logger.info("✅ Tabela truncada com sucesso")
-
-        # INSERT - Insere novos dados
-        logger.info(f"📊 Inserindo {len(df)} registros em {database}.{schema}.BRZ_CLIMA_TEMPO_PREVISAO (FULL REFRESH)...")
-
-        insert_sql = f"""
-        INSERT INTO {database}.{schema}.BRZ_CLIMA_TEMPO_PREVISAO
-            (ID_CIDADE, NR_LATITUDE, NR_LONGITUDE, NR_TEMPERATURA_ATUAL, NR_UMIDADE_ATUAL,
-             DT_PREVISAO, DS_DATA_FORMATADA, DS_DATA_COMPLETA, DS_DIA_SEMANA,
-             NR_TEMP_MAXIMA, NR_TEMP_MINIMA, NR_UMIDADE, NR_NEBULOSIDADE,
-             NR_CHUVA_MM, NR_PROB_CHUVA, DS_VENTO_VELOCIDADE,
-             DS_HORARIO_NASCER_SOL, DS_HORARIO_POR_SOL, DS_FASE_LUA,
-             DS_DESCRICAO_TEMPO, DS_CONDICAO_TEMPO, DT_COLETA_API)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-
-        records = [
-            (
-                row['ID_CIDADE'], row['NR_LATITUDE'], row['NR_LONGITUDE'],
-                row['NR_TEMPERATURA_ATUAL'], row['NR_UMIDADE_ATUAL'],
-                row['DT_PREVISAO'], row['DS_DATA_FORMATADA'], row['DS_DATA_COMPLETA'],
-                row['DS_DIA_SEMANA'], row['NR_TEMP_MAXIMA'], row['NR_TEMP_MINIMA'],
-                row['NR_UMIDADE'], row['NR_NEBULOSIDADE'], row['NR_CHUVA_MM'],
-                row['NR_PROB_CHUVA'], row['DS_VENTO_VELOCIDADE'],
-                row['DS_HORARIO_NASCER_SOL'], row['DS_HORARIO_POR_SOL'],
-                row['DS_FASE_LUA'], row['DS_DESCRICAO_TEMPO'],
-                row['DS_CONDICAO_TEMPO'], row['DT_COLETA_API']
-            )
-            for _, row in df.iterrows()
-        ]
-
-        cursor.executemany(insert_sql, records)
-        rows_inserted = cursor.rowcount
-        conn.commit()
-
-        logger.info(f"✅ {rows_inserted} registros de previsão inseridos com sucesso")
-        return rows_inserted
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao inserir dados de previsão: {e}")
+        logger.error(f"❌ Erro ao inserir dados: {e}")
         raise
     finally:
         cursor.close()
@@ -270,26 +186,13 @@ def insert_forecast_weather(conn, database: str, schema: str, df: pd.DataFrame) 
         "records_loaded": result.get("current_inserted", 0) + result.get("forecast_inserted", 0)
     }
 )
-def main(
-        snowflake_account: Optional[str] = None,
-        snowflake_user: Optional[str] = None,
-        snowflake_private_key: Optional[str] = None,
-        snowflake_warehouse: Optional[str] = None,
-        snowflake_role: Optional[str] = None
-):
+def main():
     """
     Flow principal: Coleta dados climáticos da API HGBrasil e insere no Snowflake.
 
     Executa a cada hora e gera dois tipos de registros:
     1. Clima Atual (BRZ_CLIMA_TEMPO): Condições atuais - APPEND ONLY
     2. Previsão 15 dias (BRZ_CLIMA_TEMPO_PREVISAO): Dados futuros - FULL REFRESH
-
-    Args:
-        snowflake_account: Conta Snowflake (padrão: .env)
-        snowflake_user: Usuário Snowflake (padrão: .env)
-        snowflake_private_key: Chave privada Snowflake (padrão: .env)
-        snowflake_warehouse: Warehouse Snowflake (padrão: .env)
-        snowflake_role: Role Snowflake (padrão: .env)
     """
     logger = get_run_logger()
     start_time = datetime.now()
@@ -298,123 +201,84 @@ def main(
     logger.info("🌤️  CLIMA: API HGBrasil → SNOWFLAKE")
     logger.info("=" * 80)
 
-    # Carrega configurações do ambiente
-    snowflake_account = snowflake_account or os.getenv("SNOWFLAKE_ACCOUNT")
-    snowflake_user = snowflake_user or os.getenv("SNOWFLAKE_USER")
-    snowflake_private_key = snowflake_private_key or os.getenv("SNOWFLAKE_PRIVATE_KEY")
-    snowflake_warehouse = snowflake_warehouse or os.getenv("SNOWFLAKE_WAREHOUSE")
-    snowflake_role = snowflake_role or os.getenv("SNOWFLAKE_ROLE")
+    # Carrega API Key e cria client
+    api_key = load_api_key()
+    client = WeatherAPIClient(api_key)
 
-    # Databases e schemas
-    dest_database = "AJ_DATALAKEHOUSE_RPA"
-    dest_schema = "BRONZE"
+    # Coleta dados de todas as cidades
+    logger.info(f"Coletando dados de {len(CIDADES)} cidades...")
+    weather_data_list = []
 
-    conn = None  # Inicializa conexão como None
-    try:
-        # Conexão Snowflake
-        conn = connect_snowflake(
-            account=snowflake_account,
-            user=snowflake_user,
-            private_key=snowflake_private_key,
-            warehouse=snowflake_warehouse,
-            database=dest_database,
-            schema=dest_schema,
-            role=snowflake_role
-        )
+    for i, cidade in enumerate(CIDADES, 1):
+        logger.info(f"[{i}/{len(CIDADES)}] Processando {cidade['name']}...")
+        weather_data = fetch_weather_data(client, cidade)
 
-        # Carrega API Key
-        api_key = load_api_key()
+        if weather_data:
+            weather_data_list.append(weather_data)
 
-        # Coleta dados de todas as cidades
-        logger.info(f"Coletando dados de {len(CIDADES)} cidades...")
-        weather_data_list = []
+        # Pausa de 2 segundos entre requisições (evita sobrecarga)
+        if i < len(CIDADES):
+            time.sleep(2)
 
-        for i, cidade in enumerate(CIDADES, 1):
-            logger.info(f"[{i}/{len(CIDADES)}] Processando {cidade['nome']}...")
-            weather_data = fetch_weather_data(api_key, cidade)
+    if not weather_data_list:
+        logger.error("❌ Nenhum dado coletado. Encerrando.")
+        raise Exception("Falha ao coletar dados climáticos de todas as cidades")
 
-            if weather_data:
-                weather_data_list.append(weather_data)
+    logger.info(f"✅ Dados coletados de {len(weather_data_list)}/{len(CIDADES)} cidades")
 
-            # Pausa de 2 segundos entre requisições (evita sobrecarga)
-            if i < len(CIDADES):
-                time.sleep(2)
-
-        if not weather_data_list:
-            logger.error("❌ Nenhum dado coletado. Encerrando.")
-            raise Exception("Falha ao coletar dados climáticos de todas as cidades")
-
-        logger.info(f"✅ Dados coletados de {len(weather_data_list)}/{len(CIDADES)} cidades")
-
+    with snowflake_connection(database=DATABASE, schema=SCHEMA) as conn:
         # Processa e insere clima ATUAL (apenas 1º dia)
         df_current = process_weather_data(weather_data_list, only_first=True)
-        current_inserted = insert_current_weather(conn, dest_database, dest_schema, df_current)
+        current_inserted = insert_weather_data(conn, "BRZ_CLIMA_TEMPO", df_current, truncate=False)
 
         # Processa e insere PREVISÃO (todos os 15 dias)
         df_forecast = process_weather_data(weather_data_list, only_first=False)
-        forecast_inserted = insert_forecast_weather(conn, dest_database, dest_schema, df_forecast)
+        forecast_inserted = insert_weather_data(conn, "BRZ_CLIMA_TEMPO_PREVISAO", df_forecast, truncate=True)
 
-        # Resumo
-        end_time = datetime.now()
-        elapsed = end_time - start_time
-        m, s = divmod(elapsed.total_seconds(), 60)
+    # Resumo
+    end_time = datetime.now()
+    elapsed = end_time - start_time
+    m, s = divmod(elapsed.total_seconds(), 60)
 
-        logger.info("=" * 80)
-        logger.info("✅ PROCESSO CONCLUÍDO COM SUCESSO")
-        logger.info("=" * 80)
-        logger.info(f"Database: {dest_database}")
-        logger.info(f"Schema:   {dest_schema}")
-        logger.info(f"Início:   {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"Fim:      {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"Duração:  {int(m)}m {int(s)}s")
-        logger.info(f"Cidades coletadas: {len(weather_data_list)}/{len(CIDADES)}")
-        logger.info(f"Clima atual inserido: {current_inserted} registros (BRZ_CLIMA_TEMPO)")
-        logger.info(f"Previsão inserida: {forecast_inserted} registros (BRZ_CLIMA_TEMPO_PREVISAO)")
-        logger.info("=" * 80)
+    logger.info("=" * 80)
+    logger.info("✅ PROCESSO CONCLUÍDO COM SUCESSO")
+    logger.info("=" * 80)
+    logger.info(f"Início:   {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Fim:      {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Duração:  {int(m)}m {int(s)}s")
+    logger.info(f"Cidades coletadas: {len(weather_data_list)}/{len(CIDADES)}")
+    logger.info(f"Clima atual inserido: {current_inserted} registros (BRZ_CLIMA_TEMPO)")
+    logger.info(f"Previsão inserida: {forecast_inserted} registros (BRZ_CLIMA_TEMPO_PREVISAO)")
+    logger.info("=" * 80)
 
-        # Artifact
-        try:
-            create_table_artifact(
-                key="weather-results",
-                table=[{
-                    "Métrica": "Cidades Coletadas",
-                    "Valor": f"{len(weather_data_list)}/{len(CIDADES)}"
-                }, {
-                    "Métrica": "Clima Atual Inserido",
-                    "Valor": current_inserted
-                }, {
-                    "Métrica": "Previsão Inserida",
-                    "Valor": forecast_inserted
-                }, {
-                    "Métrica": "Duração (min)",
-                    "Valor": f"{int(m)}m {int(s)}s"
-                }],
-                description=f"✅ {current_inserted} atual + {forecast_inserted} previsão inseridos"
-            )
-        except Exception as e:
-            logger.warning(f"Erro criando artifact: {e}")
-
-        # Retorna resumo para o decorador @flow_alerts
-        return {
-            "cities_processed": len(weather_data_list),
-            "current_inserted": current_inserted,
-            "forecast_inserted": forecast_inserted
-        }
-
+    # Artifact
+    try:
+        create_table_artifact(
+            key="weather-results",
+            table=[{
+                "Métrica": "Cidades Coletadas",
+                "Valor": f"{len(weather_data_list)}/{len(CIDADES)}"
+            }, {
+                "Métrica": "Clima Atual Inserido",
+                "Valor": current_inserted
+            }, {
+                "Métrica": "Previsão Inserida",
+                "Valor": forecast_inserted
+            }, {
+                "Métrica": "Duração (min)",
+                "Valor": f"{int(m)}m {int(s)}s"
+            }],
+            description=f"✅ {current_inserted} atual + {forecast_inserted} previsão inseridos"
+        )
     except Exception as e:
-        logger.error(f"❌ Erro no flow: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+        logger.warning(f"Erro criando artifact: {e}")
 
-    finally:
-        # Garante que a conexão seja fechada mesmo em caso de erro
-        if conn is not None:
-            try:
-                close_snowflake_connection(conn)
-                logger.info("✅ Conexão Snowflake fechada com sucesso")
-            except Exception as close_error:
-                logger.warning(f"Erro ao fechar conexão Snowflake: {close_error}")
+    # Retorna resumo para o decorador @flow_alerts
+    return {
+        "cities_processed": len(weather_data_list),
+        "current_inserted": current_inserted,
+        "forecast_inserted": forecast_inserted
+    }
 
 
 if __name__ == "__main__":
