@@ -152,6 +152,8 @@ class PlacaAPIClient:
             response = curl_requests.post(self.BASE_URL, json={"placa": plate_normalized}, headers=headers, proxies=self.proxies, impersonate="chrome110", timeout=self.TIMEOUT)
 
             # Casos irrecuperáveis
+            if response.status_code == 400:
+                return {"status": "invalid", "reason": response.json().get("error", "400_INVALID_DATA")}
             if response.status_code == 404:
                 return {"status": "invalid", "reason": "404_NOT_FOUND"}
             if response.status_code == 403:

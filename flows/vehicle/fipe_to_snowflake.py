@@ -15,7 +15,7 @@ from shared.decorators import flow_alerts
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 5
+BATCH_SIZE = 50
 DATABASE = "AJ_DATALAKEHOUSE_RPA"
 SCHEMA = "BRONZE"
 
@@ -77,15 +77,15 @@ def update_status(conn, vehicles: List[str], status: str) -> int:
 
     try:
         rows_updated = 0
-        for chave in vehicles:
-            marca, modelo, ano_str = chave.split('|')
-            ano = int(ano_str)
+        for key in vehicles:
+            brand, model, year_str = key.split('|')
+            year = int(year_str)
 
             cur.execute(f"""
                 UPDATE {full_table}
                 SET DS_STATUS = %s
                 WHERE DS_MARCA = %s AND DS_MODELO = %s AND NR_ANO_MODELO = %s
-            """, (status, marca, modelo, ano))
+            """, (status, brand, model, year))
             rows_updated += cur.rowcount
 
         conn.commit()
@@ -243,20 +243,16 @@ def insert_fipe_data(conn, df: pd.DataFrame) -> int:
     try:
         insert_sql = f"""
         INSERT INTO {full_table}
-            (DS_MARCA, DS_MODELO, NR_ANO_MODELO, DS_MODELO_API, NR_ANO_MODELO_API,
-             FL_BUSCA_ALTERNATIVA, DS_MODELO_ORIGINAL, DS_ANOS_DISPONIVEIS,
-             CD_MARCA_FIPE, CD_MODELO_FIPE, CD_ANO_COMBUSTIVEL,
-             DS_COMBUSTIVEL, DS_SIGLA_COMBUSTIVEL, CD_FIPE, VL_FIPE, VL_FIPE_NUMERICO,
-             DS_MES_REFERENCIA, CD_AUTENTICACAO, NR_TIPO_VEICULO, DT_CONSULTA_FIPE)
+            (DS_MARCA, DS_MODELO, NR_ANO_MODELO, DS_MODELO_API, NR_ANO_MODELO_API, FL_BUSCA_ALTERNATIVA, DS_MODELO_ORIGINAL, 
+             DS_ANOS_DISPONIVEIS, CD_MARCA_FIPE, CD_MODELO_FIPE, CD_ANO_COMBUSTIVEL,DS_COMBUSTIVEL, DS_SIGLA_COMBUSTIVEL, 
+             CD_FIPE, VL_FIPE, VL_FIPE_NUMERICO, DS_MES_REFERENCIA, CD_AUTENTICACAO, NR_TIPO_VEICULO, DT_CONSULTA_FIPE)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         records = [tuple(row[col] for col in [
-            'DS_MARCA', 'DS_MODELO', 'NR_ANO_MODELO', 'DS_MODELO_API', 'NR_ANO_MODELO_API',
-            'FL_BUSCA_ALTERNATIVA', 'DS_MODELO_ORIGINAL', 'DS_ANOS_DISPONIVEIS',
-            'CD_MARCA_FIPE', 'CD_MODELO_FIPE', 'CD_ANO_COMBUSTIVEL',
-            'DS_COMBUSTIVEL', 'DS_SIGLA_COMBUSTIVEL', 'CD_FIPE', 'VL_FIPE', 'VL_FIPE_NUMERICO',
-            'DS_MES_REFERENCIA', 'CD_AUTENTICACAO', 'NR_TIPO_VEICULO', 'DT_CONSULTA_FIPE'
+            'DS_MARCA', 'DS_MODELO', 'NR_ANO_MODELO', 'DS_MODELO_API', 'NR_ANO_MODELO_API', 'FL_BUSCA_ALTERNATIVA', 'DS_MODELO_ORIGINAL',
+            'DS_ANOS_DISPONIVEIS', 'CD_MARCA_FIPE', 'CD_MODELO_FIPE', 'CD_ANO_COMBUSTIVEL', 'DS_COMBUSTIVEL', 'DS_SIGLA_COMBUSTIVEL',
+            'CD_FIPE', 'VL_FIPE', 'VL_FIPE_NUMERICO', 'DS_MES_REFERENCIA', 'CD_AUTENTICACAO', 'NR_TIPO_VEICULO', 'DT_CONSULTA_FIPE'
         ]) for _, row in df.iterrows()]
 
         cur.executemany(insert_sql, records)

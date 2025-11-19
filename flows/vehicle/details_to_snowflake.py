@@ -17,7 +17,7 @@ from shared.decorators import flow_alerts
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 5
+BATCH_SIZE = 50
 RATE_LIMIT_PER_MIN = 5
 DATABASE = "AJ_DATALAKEHOUSE_RPA"
 SCHEMA = "BRONZE"
@@ -28,9 +28,8 @@ TABLE_VEHICLE_DETAILS = "BRZ_02_VEICULO_DETALHE"
 
 # Colunas
 PLATE_COLUMNS = [
-    'DS_PLACA', 'DS_MARCA', 'DS_MODELO',
-    'NR_ANO_FABRICACAO', 'NR_ANO_MODELO',
-    'DS_COR', 'DT_COLETA_API'
+    'DS_PLACA', 'DS_MARCA', 'DS_MODELO', 'NR_ANO_FABRICACAO',
+    'NR_ANO_MODELO', 'DS_COR', 'DT_COLETA_API'
 ]
 
 
@@ -239,6 +238,12 @@ def main(batch_size: int = BATCH_SIZE):
         # Busca pendentes
         plates = get_pending_plates(conn, batch_size)
 
+        # Exemplo pronto para utilizar em debug manual afim de validar alguma placa específica
+        # plates = PlateRecord(
+        #     plate='TXM1F73',
+        #     date=datetime.now()
+        # )
+
         if not plates:
             logger.info("Nenhuma placa pendente")
             return {"inserted": 0}
@@ -286,7 +291,7 @@ if __name__ == "__main__":
     ).deploy(
         name="vehicle-details-api-to-snowflake",
         work_pool_name="local-pool",
-        schedules=[CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")],
+        schedules=[CronSchedule(cron="*/15 * * * *", timezone="America/Sao_Paulo")],
         tags=["rpa", "api", "snowflake", "bronze"],
         parameters={},
         description="🚘 Placamaster → Snowflake | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
