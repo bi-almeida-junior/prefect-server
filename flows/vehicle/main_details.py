@@ -19,7 +19,7 @@ from shared.utils import get_datetime_brasilia
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 50
+BATCH_SIZE = 10
 RATE_LIMIT_PER_MIN = 5
 SCHEMA = "public"
 
