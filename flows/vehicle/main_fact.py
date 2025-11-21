@@ -285,7 +285,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # Execução local
+    # execução local
     # main()
 
     main.from_source(
