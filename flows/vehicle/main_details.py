@@ -19,7 +19,7 @@ from shared.utils import get_datetime_brasilia
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 1
+BATCH_SIZE = 25
 RATE_LIMIT_PER_MIN = 5
 SCHEMA = "public"
 
@@ -355,17 +355,17 @@ def main(batch_size: int = BATCH_SIZE):
 
 if __name__ == "__main__":
     # Execução local
-    main()
+    # main()
 
-    # main.from_source(
-    #     source=".",
-    #     entrypoint="flows/vehicle/main_details.py:main"
-    # ).deploy(
-    #     name="vehicle-details-api-to-postgresql",
-    #     work_pool_name="local-pool",
-    #     schedules=[CronSchedule(cron="*/15 * * * *", timezone="America/Sao_Paulo")],
-    #     tags=["rpa", "api", "postgresql", "dw_rpa"],
-    #     parameters={},
-    #     description="🚘 Placamaster → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
-    #     version="3.0.0"
-    # )
+    main.from_source(
+        source=".",
+        entrypoint="flows/vehicle/main_details.py:main"
+    ).deploy(
+        name="vehicle-details-api-to-postgresql",
+        work_pool_name="local-pool",
+        schedules=[CronSchedule(cron="*/10 * * * *", timezone="America/Sao_Paulo")],
+        tags=["rpa", "api", "postgresql", "dw_rpa"],
+        parameters={},
+        description="🚘 Placamaster → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
+        version="3.0.0"
+    )
