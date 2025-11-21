@@ -334,7 +334,7 @@ if __name__ == "__main__":
         name="vehicle-details-api-to-postgresql",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="*/15 * * * *", timezone="America/Sao_Paulo")],
-        tags=["rpa", "api", "postgresql", "bronze"],
+        tags=["rpa", "api", "postgresql", "dw_rpa"],
         parameters={},
         description="🚘 Placamaster → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
         version="3.0.0"

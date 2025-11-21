@@ -358,7 +358,7 @@ if __name__ == "__main__":
         name="vehicle-fipe-to-postgresql",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="*/15 * * * *", timezone="America/Sao_Paulo")],
-        tags=["rpa", "api", "postgresql", "bronze"],
+        tags=["rpa", "api", "postgresql", "dw_rpa"],
         parameters={},
         description="🚗 FIPE → PostgreSQL | Consulta valores FIPE e carrega no Bronze. Processa veículos em lote com busca inteligente.",
         version="3.0.0"

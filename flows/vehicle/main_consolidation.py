@@ -283,7 +283,7 @@ if __name__ == "__main__":
         name="vehicle-consolidation",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")],
-        tags=["rpa", "consolidation", "postgresql", "bronze"],
+        tags=["rpa", "sql", "postgresql", "dw_rpa"],
         parameters={},
         description="🚗 Consolidação Veículos → PostgreSQL | Consolida veículos únicos da BRZ_02 para BRZ_03, eliminando duplicatas e preparando para consulta FIPE.",
         version="1.0.0"

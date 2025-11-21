@@ -294,7 +294,7 @@ if __name__ == "__main__":
         name="vehicle-fact-consolidation",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="0 */6 * * *", timezone="America/Sao_Paulo")],
-        tags=["etl", "postgresql", "fato"],
+        tags=["rpa", "sql", "postgresql", "dw_rpa"],
         parameters={},
         description="📊 Consolidação Fato Veículos | Gera tabela fato consolidando dados de detalhes (brz_02) e FIPE (brz_04). Executa a cada 6 horas.",
         version="1.0.0"

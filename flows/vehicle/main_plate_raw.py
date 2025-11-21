@@ -339,10 +339,10 @@ if __name__ == "__main__":
         source=".",
         entrypoint="flows/vehicle/main_plate_raw.py:main"
     ).deploy(
-        name="vehicle-placa-raw-consolidation",
+        name="vehicle-plate-raw-consolidation",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="0 1 * * *", timezone="America/Sao_Paulo")],
-        tags=["rpa", "consolidation", "postgresql", "sqlserver", "bronze"],
+        tags=["rpa", "sql", "postgresql", "dw_rpa"],
         parameters={},
         description="🚗 Consolidação de Placas → PostgreSQL | Extrai placas de WPS (PostgreSQL) e Luminus GS/NR/NS (SQL Server) e consolida na tabela bronze.",
         version="1.0.0"
