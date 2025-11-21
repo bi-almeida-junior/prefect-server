@@ -293,7 +293,7 @@ if __name__ == "__main__":
         name="weather-api-to-snowflake",
         work_pool_name="local-pool",
         schedules=[
-            CronSchedule(cron="0 * * * *", timezone="America/Sao_Paulo")
+            CronSchedule(cron="0 */4 * * *", timezone="America/Sao_Paulo")
         ],
         tags=["rpa", "api", "snowflake", "bronze"],
         parameters={},
