@@ -11,21 +11,20 @@ from prefect.client.schemas.schedules import CronSchedule
 
 from flows.vehicle.client import PlacaAPIClient
 from flows.vehicle.schemas import PlateRecord, transform_plate_to_snowflake_row
-from shared.connections.snowflake import snowflake_connection
+from shared.connections.postgresql import postgresql_connection
 from shared.decorators import flow_alerts
 from shared.utils import get_datetime_brasilia
 
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 5
+BATCH_SIZE = 50
 RATE_LIMIT_PER_MIN = 5
-DATABASE = "AJ_DATALAKEHOUSE_RPA"
-SCHEMA = "BRONZE"
+SCHEMA = "public"
 
 # Tables
-TABLE_PLATE_RAW = "BRZ_01_PLACA_RAW"
-TABLE_VEHICLE_DETAILS = "BRZ_02_VEICULO_DETALHE"
+TABLE_PLATE_RAW = "brz_01_placa_raw"
+TABLE_VEHICLE_DETAILS = "brz_02_veiculo_detalhe"
 
 # Colunas
 PLATE_COLUMNS = [
@@ -53,16 +52,15 @@ def get_pending_plates(conn, batch_size: int) -> List[PlateRecord]:
     """Busca placas pendentes (status P, E, N)."""
     logger = get_run_logger()
     cur = conn.cursor()
-    full_table = f"{DATABASE}.{SCHEMA}.{TABLE_PLATE_RAW}"
 
     try:
         cur.execute(f"""
-            SELECT DS_PLACA, DT_INSERCAO
-            FROM {full_table}
-            WHERE DS_STATUS IN ('P', 'E', 'N')
+            SELECT ds_placa, dt_insercao
+            FROM {TABLE_PLATE_RAW}
+            WHERE ds_status IN ('P', 'E', 'N')
             ORDER BY
-                CASE DS_STATUS WHEN 'P' THEN 1 WHEN 'E' THEN 2 WHEN 'N' THEN 3 END,
-                DT_INSERCAO DESC
+                CASE ds_status WHEN 'P' THEN 1 WHEN 'E' THEN 2 WHEN 'N' THEN 3 END,
+                dt_insercao DESC
             LIMIT {batch_size}
         """)
         results = cur.fetchall()
@@ -87,26 +85,25 @@ def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[s
         return 0
 
     cur = conn.cursor()
-    full_table = f"{DATABASE}.{SCHEMA}.{TABLE_PLATE_RAW}"
 
     try:
         if reasons:
             # Atualiza com motivo usando executemany (batch único)
             if update_collection_date:
                 update_sql = f"""
-                    UPDATE {full_table}
-                    SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s,
-                        NR_TENTATIVAS = NR_TENTATIVAS + 1,
-                        DT_COLETA = %s
-                    WHERE DS_PLACA = %s
+                    UPDATE {TABLE_PLATE_RAW}
+                    SET ds_status = %s, ds_motivo_erro = %s,
+                        nr_tentativas = nr_tentativas + 1,
+                        dt_coleta = %s
+                    WHERE ds_placa = %s
                 """
                 dt_coleta = get_datetime_brasilia()
                 params = [(status, reasons.get(plate, 'UNKNOWN'), dt_coleta, plate) for plate in plates]
             else:
                 update_sql = f"""
-                    UPDATE {full_table}
-                    SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s
-                    WHERE DS_PLACA = %s
+                    UPDATE {TABLE_PLATE_RAW}
+                    SET ds_status = %s, ds_motivo_erro = %s
+                    WHERE ds_placa = %s
                 """
                 params = [(status, reasons.get(plate, 'UNKNOWN'), plate) for plate in plates]
 
@@ -117,17 +114,17 @@ def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[s
             placeholders = ','.join(['%s'] * len(plates))
             if update_collection_date:
                 cur.execute(f"""
-                    UPDATE {full_table}
-                    SET DS_STATUS = %s,
-                        NR_TENTATIVAS = NR_TENTATIVAS + 1,
-                        DT_COLETA = %s
-                    WHERE DS_PLACA IN ({placeholders})
+                    UPDATE {TABLE_PLATE_RAW}
+                    SET ds_status = %s,
+                        nr_tentativas = nr_tentativas + 1,
+                        dt_coleta = %s
+                    WHERE ds_placa IN ({placeholders})
                 """, [status, get_datetime_brasilia()] + plates)
             else:
                 cur.execute(f"""
-                    UPDATE {full_table}
-                    SET DS_STATUS = %s
-                    WHERE DS_PLACA IN ({placeholders})
+                    UPDATE {TABLE_PLATE_RAW}
+                    SET ds_status = %s
+                    WHERE ds_placa IN ({placeholders})
                 """, [status] + plates)
             rows_updated = cur.rowcount
 
@@ -157,6 +154,15 @@ def process_plates(plates: List[PlateRecord], client: PlacaAPIClient) -> Dict:
 
     for i, plate_record in enumerate(plates, 1):
         plate = plate_record.plate
+
+        # Valida formato ANTES de fazer sleep (otimização)
+        if not client.validate_plate(plate):
+            invalid[plate] = "INVALID_PLATE_FORMAT"
+            logger.warning(f"[{plate}] Formato inválido - pulando sem delay")
+            if i % 10 == 0 or i == 1:
+                logger.info(f"[{i}/{len(plates)}] Processado: {plate} (inválido)")
+            continue
+
         current_time = time.time()
 
         # Rate limit: janela de 60s
@@ -207,19 +213,20 @@ def process_plates(plates: List[PlateRecord], client: PlacaAPIClient) -> Dict:
 
 @task(name="insert_plate_data", log_prints=True, cache_policy=NONE)
 def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
-    """Insere dados de placas no Snowflake."""
+    """Insere dados de placas no PostgreSQL."""
     logger = get_run_logger()
 
     if df.empty:
         return 0
 
     cur = conn.cursor()
-    full_table = f"{DATABASE}.{SCHEMA}.{TABLE_VEHICLE_DETAILS}"
 
     try:
-        columns_list = ", ".join(PLATE_COLUMNS)
+        # Converte nomes de colunas para minúsculas (padrão PostgreSQL)
+        columns_lower = [col.lower() for col in PLATE_COLUMNS]
+        columns_list = ", ".join(columns_lower)
         placeholders = ", ".join(["%s"] * len(PLATE_COLUMNS))
-        insert_sql = f"INSERT INTO {full_table} ({columns_list}) VALUES ({placeholders})"
+        insert_sql = f"INSERT INTO {TABLE_VEHICLE_DETAILS} ({columns_list}) VALUES ({placeholders})"
 
         records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
 
@@ -238,27 +245,27 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         cur.close()
 
 
-@flow(name="vehicle_details_api_to_snowflake", log_prints=True)
+@flow(name="vehicle_details_api_to_postgresql", log_prints=True)
 @flow_alerts(
     flow_name="Placa Consulta",
     source="API Placamaster",
-    destination="Snowflake (BRONZE)",
+    destination="PostgreSQL (BRONZE)",
     extract_summary=lambda result: {"records_loaded": result.get("inserted", 0)}
 )
 def main(batch_size: int = BATCH_SIZE):
-    """Flow: Consulta API Placamaster e insere no Snowflake."""
+    """Flow: Consulta API Placamaster e insere no PostgreSQL."""
     logger = get_run_logger()
     start_time = datetime.now()
 
     logger.info("=" * 80)
-    logger.info("🚘 PLACA: API → SNOWFLAKE")
+    logger.info("🚘 PLACA: API → POSTGRESQL")
     logger.info("=" * 80)
 
     # Proxy
     proxies = load_proxy()
     client = PlacaAPIClient(proxies)
 
-    with snowflake_connection(database=DATABASE, schema=SCHEMA) as conn:
+    with postgresql_connection(schema=SCHEMA) as conn:
         try:
             # Busca pendentes
             plates = get_pending_plates(conn, batch_size)
@@ -273,8 +280,8 @@ def main(batch_size: int = BATCH_SIZE):
                 logger.info("Nenhuma placa pendente")
                 return {"inserted": 0}
 
-            # Atualiza para 'P' e registra tentativa (sem commit)
-            update_status(conn, [p.plate for p in plates], 'P', update_collection_date=True)
+            # Atualiza para 'P' e registra tentativa (com commit imediato para visibilidade em tempo real)
+            update_status(conn, [p.plate for p in plates], 'P', update_collection_date=True, commit=True)
 
             # Processa
             result = process_plates(plates, client)
@@ -324,11 +331,11 @@ if __name__ == "__main__":
         source=".",
         entrypoint="flows/vehicle/main_details.py:main"
     ).deploy(
-        name="vehicle-details-api-to-snowflake",
+        name="vehicle-details-api-to-postgresql",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="*/15 * * * *", timezone="America/Sao_Paulo")],
-        tags=["rpa", "api", "snowflake", "bronze"],
+        tags=["rpa", "api", "postgresql", "bronze"],
         parameters={},
-        description="🚘 Placamaster → Snowflake | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
-        version="2.0.0"
+        description="🚘 Placamaster → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
+        version="3.0.0"
     )

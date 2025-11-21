@@ -81,6 +81,30 @@ def transform_to_snowflake_row(vehicle: VehicleRecord, fipe_data: Dict[str, Any]
     fuel = fipe_data.get("Combustivel", "")
     fuel_abbr = fuel[0] if fuel else None
 
+    # Extrai mês e ano da referência FIPE (ex: "novembro de 2025" -> mes=11, ano=2025)
+    reference_month_str = fipe_data.get("MesReferencia", "")
+    nr_mes_referencia = None
+    nr_ano_referencia = None
+
+    if reference_month_str:
+        try:
+            # Mapeamento de meses em português
+            meses = {
+                "janeiro": 1, "fevereiro": 2, "março": 3, "abril": 4,
+                "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
+                "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12
+            }
+
+            parts = reference_month_str.lower().split(" de ")
+            if len(parts) == 2:
+                mes_nome = parts[0].strip()
+                ano_str = parts[1].strip()
+
+                nr_mes_referencia = meses.get(mes_nome)
+                nr_ano_referencia = int(ano_str)
+        except:
+            pass
+
     return {
         "DS_MARCA": vehicle.brand,
         "DS_MODELO": vehicle.model,
@@ -98,7 +122,9 @@ def transform_to_snowflake_row(vehicle: VehicleRecord, fipe_data: Dict[str, Any]
         "CD_FIPE": fipe_data.get("CodigoFipe"),
         "VL_FIPE": value_text,
         "VL_FIPE_NUMERICO": value_numeric,
-        "DS_MES_REFERENCIA": fipe_data.get("MesReferencia"),
+        "DS_MES_REFERENCIA": reference_month_str,
+        "NR_MES_REFERENCIA": nr_mes_referencia,
+        "NR_ANO_REFERENCIA": nr_ano_referencia,
         "CD_AUTENTICACAO": fipe_data.get("Autenticacao"),
         "NR_TIPO_VEICULO": 1,
         "DT_CONSULTA_FIPE": get_datetime_brasilia(),
