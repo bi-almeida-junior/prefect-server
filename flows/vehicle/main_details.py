@@ -18,7 +18,7 @@ from shared.utils import get_datetime_brasilia
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 50
+BATCH_SIZE = 5
 RATE_LIMIT_PER_MIN = 5
 DATABASE = "AJ_DATALAKEHOUSE_RPA"
 SCHEMA = "BRONZE"
@@ -79,7 +79,7 @@ def get_pending_plates(conn, batch_size: int) -> List[PlateRecord]:
 
 
 @task(name="update_status", log_prints=True, cache_policy=NONE)
-def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[str, str]] = None, update_collection_date: bool = False) -> int:
+def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[str, str]] = None, update_collection_date: bool = False, commit: bool = False) -> int:
     """Atualiza status de placas."""
     logger = get_run_logger()
 
@@ -90,28 +90,30 @@ def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[s
     full_table = f"{DATABASE}.{SCHEMA}.{TABLE_PLATE_RAW}"
 
     try:
-        rows_updated = 0
-
         if reasons:
-            # Atualiza com motivo (para status 'I')
-            for plate in plates:
-                if update_collection_date:
-                    cur.execute(f"""
-                        UPDATE {full_table}
-                        SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s,
-                            NR_TENTATIVAS = NR_TENTATIVAS + 1,
-                            DT_COLETA = %s
-                        WHERE DS_PLACA = %s
-                    """, (status, reasons.get(plate, 'UNKNOWN'), get_datetime_brasilia(), plate))
-                else:
-                    cur.execute(f"""
-                        UPDATE {full_table}
-                        SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s
-                        WHERE DS_PLACA = %s
-                    """, (status, reasons.get(plate, 'UNKNOWN'), plate))
-                rows_updated += cur.rowcount
+            # Atualiza com motivo usando executemany (batch único)
+            if update_collection_date:
+                update_sql = f"""
+                    UPDATE {full_table}
+                    SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s,
+                        NR_TENTATIVAS = NR_TENTATIVAS + 1,
+                        DT_COLETA = %s
+                    WHERE DS_PLACA = %s
+                """
+                dt_coleta = get_datetime_brasilia()
+                params = [(status, reasons.get(plate, 'UNKNOWN'), dt_coleta, plate) for plate in plates]
+            else:
+                update_sql = f"""
+                    UPDATE {full_table}
+                    SET DS_STATUS = %s, DS_MOTIVO_ERRO = %s
+                    WHERE DS_PLACA = %s
+                """
+                params = [(status, reasons.get(plate, 'UNKNOWN'), plate) for plate in plates]
+
+            cur.executemany(update_sql, params)
+            rows_updated = cur.rowcount
         else:
-            # Atualiza sem motivo
+            # Atualiza sem motivo (batch único)
             placeholders = ','.join(['%s'] * len(plates))
             if update_collection_date:
                 cur.execute(f"""
@@ -129,7 +131,8 @@ def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[s
                 """, [status] + plates)
             rows_updated = cur.rowcount
 
-        conn.commit()
+        if commit:
+            conn.commit()
         logger.info(f"✓ {rows_updated} placas → status '{status}'")
         return rows_updated
 
@@ -203,7 +206,7 @@ def process_plates(plates: List[PlateRecord], client: PlacaAPIClient) -> Dict:
 
 
 @task(name="insert_plate_data", log_prints=True, cache_policy=NONE)
-def insert_plate_data(conn, df: pd.DataFrame) -> int:
+def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
     """Insere dados de placas no Snowflake."""
     logger = get_run_logger()
 
@@ -221,7 +224,9 @@ def insert_plate_data(conn, df: pd.DataFrame) -> int:
         records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
 
         cur.executemany(insert_sql, records)
-        conn.commit()
+
+        if commit:
+            conn.commit()
 
         logger.info(f"✓ {cur.rowcount} registros inseridos")
         return cur.rowcount
@@ -254,51 +259,62 @@ def main(batch_size: int = BATCH_SIZE):
     client = PlacaAPIClient(proxies)
 
     with snowflake_connection(database=DATABASE, schema=SCHEMA) as conn:
-        # Busca pendentes
-        plates = get_pending_plates(conn, batch_size)
+        try:
+            # Busca pendentes
+            plates = get_pending_plates(conn, batch_size)
 
-        # Exemplo pronto para utilizar em debug manual afim de validar alguma placa específica
-        # plates = PlateRecord(
-        #     plate='TXM1F73',
-        #     date=datetime.now()
-        # )
+            # Exemplo pronto para utilizar em debug manual afim de validar alguma placa específica
+            # plates = PlateRecord(
+            #     plate='TXM1F73',
+            #     date=datetime.now()
+            # )
 
-        if not plates:
-            logger.info("Nenhuma placa pendente")
-            return {"inserted": 0}
+            if not plates:
+                logger.info("Nenhuma placa pendente")
+                return {"inserted": 0}
 
-        # Atualiza para 'P' e registra tentativa
-        update_status(conn, [p.plate for p in plates], 'P', update_collection_date=True)
+            # Atualiza para 'P' e registra tentativa (sem commit)
+            update_status(conn, [p.plate for p in plates], 'P', update_collection_date=True)
 
-        # Processa
-        result = process_plates(plates, client)
-        df = result["df"]
-        failed = result["failed"]
-        invalid = result["invalid"]
+            # Processa
+            result = process_plates(plates, client)
+            df = result["df"]
+            failed = result["failed"]
+            invalid = result["invalid"]
 
-        # Insere
-        inserted = 0
-        if not df.empty:
-            inserted = insert_plate_data(conn, df)
-            # Atualiza para 'S' (não incrementa tentativas novamente)
-            update_status(conn, df['DS_PLACA'].tolist(), 'S')
+            # Insere (sem commit)
+            inserted = 0
+            if not df.empty:
+                inserted = insert_plate_data(conn, df)
+                # Atualiza para 'S' (não incrementa tentativas novamente, sem commit)
+                update_status(conn, df['DS_PLACA'].tolist(), 'S')
 
-        # Atualiza inválidos (não incrementa tentativas novamente)
-        if invalid:
-            update_status(conn, list(invalid.keys()), 'I', invalid)
+            # Atualiza inválidos (não incrementa tentativas novamente, sem commit)
+            if invalid:
+                update_status(conn, list(invalid.keys()), 'I', invalid)
 
-        # Atualiza erros (não incrementa tentativas novamente)
-        if failed:
-            update_status(conn, failed, 'E')
+            # Atualiza erros (não incrementa tentativas novamente, sem commit)
+            if failed:
+                update_status(conn, failed, 'E')
 
-        # Resumo
-        elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info("=" * 80)
-        logger.info(f"✅ Concluído: {inserted} inseridos | {len(invalid)} inválidos | {len(failed)} erros")
-        logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
-        logger.info("=" * 80)
+            # Commit único para todo o lote
+            conn.commit()
+            logger.info("✓ Transação commitada com sucesso")
 
-        return {"inserted": inserted}
+            # Resumo
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.info("=" * 80)
+            logger.info(f"✅ Concluído: {inserted} inseridos | {len(invalid)} inválidos | {len(failed)} erros")
+            logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
+            logger.info("=" * 80)
+
+            return {"inserted": inserted}
+
+        except Exception as e:
+            logger.error(f"❌ Erro durante processamento: {e}")
+            conn.rollback()
+            logger.warning("⚠️ Rollback executado - nenhuma alteração foi persistida")
+            raise
 
 
 if __name__ == "__main__":

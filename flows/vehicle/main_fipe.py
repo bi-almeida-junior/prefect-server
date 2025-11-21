@@ -15,7 +15,7 @@ from shared.decorators import flow_alerts
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 50
+BATCH_SIZE = 5
 DATABASE = "AJ_DATALAKEHOUSE_RPA"
 SCHEMA = "BRONZE"
 
@@ -65,8 +65,8 @@ def get_pending_vehicles(conn, batch_size: int) -> List[VehicleRecord]:
 
 
 @task(name="update_status", log_prints=True, cache_policy=NONE)
-def update_status(conn, vehicles: List[str], status: str) -> int:
-    """Atualiza status de veículos."""
+def update_status(conn, vehicles: List[str], status: str, commit: bool = False) -> int:
+    """Atualiza status de veículos em lote."""
     logger = get_run_logger()
 
     if not vehicles:
@@ -76,19 +76,25 @@ def update_status(conn, vehicles: List[str], status: str) -> int:
     full_table = f"{DATABASE}.{SCHEMA}.{TABLE_VEHICLE_CONSOLIDATED}"
 
     try:
-        rows_updated = 0
+        # Prepara parâmetros para executemany (batch único)
+        update_sql = f"""
+            UPDATE {full_table}
+            SET DS_STATUS = %s
+            WHERE DS_MARCA = %s AND DS_MODELO = %s AND NR_ANO_MODELO = %s
+        """
+
+        params = []
         for key in vehicles:
             brand, model, year_str = key.split('|')
             year = int(year_str)
+            params.append((status, brand, model, year))
 
-            cur.execute(f"""
-                UPDATE {full_table}
-                SET DS_STATUS = %s
-                WHERE DS_MARCA = %s AND DS_MODELO = %s AND NR_ANO_MODELO = %s
-            """, (status, brand, model, year))
-            rows_updated += cur.rowcount
+        cur.executemany(update_sql, params)
+        rows_updated = cur.rowcount
 
-        conn.commit()
+        if commit:
+            conn.commit()
+
         logger.info(f"✓ {rows_updated} veículos → status '{status}'")
         return rows_updated
 
@@ -230,7 +236,7 @@ def process_vehicles(vehicles: List[VehicleRecord], table_code: str) -> Dict:
 
 
 @task(name="insert_fipe_data", log_prints=True, cache_policy=NONE)
-def insert_fipe_data(conn, df: pd.DataFrame) -> int:
+def insert_fipe_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
     """Insere dados FIPE no Snowflake."""
     logger = get_run_logger()
 
@@ -243,8 +249,8 @@ def insert_fipe_data(conn, df: pd.DataFrame) -> int:
     try:
         insert_sql = f"""
         INSERT INTO {full_table}
-            (DS_MARCA, DS_MODELO, NR_ANO_MODELO, DS_MODELO_API, NR_ANO_MODELO_API, FL_BUSCA_ALTERNATIVA, DS_MODELO_ORIGINAL, 
-             DS_ANOS_DISPONIVEIS, CD_MARCA_FIPE, CD_MODELO_FIPE, CD_ANO_COMBUSTIVEL,DS_COMBUSTIVEL, DS_SIGLA_COMBUSTIVEL, 
+            (DS_MARCA, DS_MODELO, NR_ANO_MODELO, DS_MODELO_API, NR_ANO_MODELO_API, FL_BUSCA_ALTERNATIVA, DS_MODELO_ORIGINAL,
+             DS_ANOS_DISPONIVEIS, CD_MARCA_FIPE, CD_MODELO_FIPE, CD_ANO_COMBUSTIVEL,DS_COMBUSTIVEL, DS_SIGLA_COMBUSTIVEL,
              CD_FIPE, VL_FIPE, VL_FIPE_NUMERICO, DS_MES_REFERENCIA, CD_AUTENTICACAO, NR_TIPO_VEICULO, DT_CONSULTA_FIPE)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
@@ -256,7 +262,9 @@ def insert_fipe_data(conn, df: pd.DataFrame) -> int:
         ]) for _, row in df.iterrows()]
 
         cur.executemany(insert_sql, records)
-        conn.commit()
+
+        if commit:
+            conn.commit()
 
         logger.info(f"✓ {cur.rowcount} registros inseridos")
         return cur.rowcount
@@ -290,45 +298,56 @@ def main(batch_size: int = BATCH_SIZE):
     logger.info(f"📅 Tabela FIPE: {table_code}")
 
     with snowflake_connection(database=DATABASE, schema=SCHEMA) as conn:
-        # Busca pendentes
-        vehicles = get_pending_vehicles(conn, batch_size)
+        try:
+            # Busca pendentes
+            vehicles = get_pending_vehicles(conn, batch_size)
 
-        if not vehicles:
-            logger.info("Nenhum veículo pendente")
-            return {"inserted": 0}
+            if not vehicles:
+                logger.info("Nenhum veículo pendente")
+                return {"inserted": 0}
 
-        # Atualiza para 'P' (processando)
-        update_status(conn, [v.key for v in vehicles], 'P')
+            # Atualiza para 'P' (processando, sem commit)
+            update_status(conn, [v.key for v in vehicles], 'P')
 
-        # Processa
-        result = process_vehicles(vehicles, table_code)
-        df = result["df"]
-        failed = result["failed"]
-        invalid = result["invalid"]
+            # Processa
+            result = process_vehicles(vehicles, table_code)
+            df = result["df"]
+            failed = result["failed"]
+            invalid = result["invalid"]
 
-        # Insere
-        inserted = 0
-        if not df.empty:
-            inserted = insert_fipe_data(conn, df)
-            # Atualiza para 'S' (sucesso)
-            update_status(conn, df['CHAVE_VEICULO'].tolist(), 'S')
+            # Insere (sem commit)
+            inserted = 0
+            if not df.empty:
+                inserted = insert_fipe_data(conn, df)
+                # Atualiza para 'S' (sem commit)
+                update_status(conn, df['CHAVE_VEICULO'].tolist(), 'S')
 
-        # Atualiza inválidos
-        if invalid:
-            update_status(conn, list(invalid.keys()), 'I')
+            # Atualiza inválidos (sem commit)
+            if invalid:
+                update_status(conn, list(invalid.keys()), 'I')
 
-        # Atualiza erros
-        if failed:
-            update_status(conn, failed, 'E')
+            # Atualiza erros (sem commit)
+            if failed:
+                update_status(conn, failed, 'E')
 
-        # Resumo
-        elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info("=" * 80)
-        logger.info(f"✅ Concluído: {inserted} inseridos | {len(invalid)} inválidos | {len(failed)} erros")
-        logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
-        logger.info("=" * 80)
+            # Commit único para todo o lote
+            conn.commit()
+            logger.info("✓ Transação commitada com sucesso")
 
-        return {"inserted": inserted}
+            # Resumo
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.info("=" * 80)
+            logger.info(f"✅ Concluído: {inserted} inseridos | {len(invalid)} inválidos | {len(failed)} erros")
+            logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
+            logger.info("=" * 80)
+
+            return {"inserted": inserted}
+
+        except Exception as e:
+            logger.error(f"❌ Erro durante processamento: {e}")
+            conn.rollback()
+            logger.warning("⚠️ Rollback executado - nenhuma alteração foi persistida")
+            raise
 
 
 if __name__ == "__main__":
@@ -336,7 +355,7 @@ if __name__ == "__main__":
 
     main.from_source(
         source=".",
-        entrypoint="flows/vehicle/fipe_to_snowflake.py:main"
+        entrypoint="flows/vehicle/main_fipe.py:main"
     ).deploy(
         name="vehicle-fipe-to-snowflake",
         work_pool_name="local-pool",
