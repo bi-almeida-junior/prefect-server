@@ -2,15 +2,21 @@ FROM prefecthq/prefect:3-latest
 
 WORKDIR /opt/prefect
 
-# Instalar dependências do sistema para ODBC (SQL Server) - Oracle Linux/RHEL
-RUN yum install -y curl \
-    && curl https://packages.microsoft.com/config/rhel/8/prod.repo > /etc/yum.repos.d/mssql-release.repo \
-    && yum install -y \
-    unixODBC \
-    unixODBC-devel \
-    && ACCEPT_EULA=Y yum install -y msodbcsql18 \
-    && yum clean all \
-    && rm -rf /var/cache/yum
+# Instalar dependências do sistema para ODBC (SQL Server)
+# Nota: A imagem base prefecthq/prefect:3-latest é Debian/Ubuntu, mesmo rodando em Oracle Linux host
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    apt-transport-https \
+    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y \
+    unixodbc \
+    unixodbc-dev \
+    msodbcsql18 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copiar requirements.txt primeiro (melhor uso de cache do Docker)
 COPY requirements.txt .
