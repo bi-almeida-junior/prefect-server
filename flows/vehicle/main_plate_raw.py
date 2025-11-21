@@ -340,7 +340,7 @@ if __name__ == "__main__":
         source=".",
         entrypoint="flows/vehicle/main_plate_raw.py:main"
     ).deploy(
-        name="vehicle-plate-raw-consolidation",
+        name="vehicle-plate-raw",
         work_pool_name="local-pool",
         schedules=[CronSchedule(cron="0 1 * * *", timezone="America/Sao_Paulo")],
         tags=["rpa", "sql", "postgresql", "dw_rpa"],

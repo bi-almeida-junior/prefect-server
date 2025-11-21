@@ -11,7 +11,7 @@ def sqlserver_connection(
         database: Optional[str] = None,
         user: Optional[str] = None,
         password: Optional[str] = None,
-        driver: str = "SQL Server",
+        driver: str = "ODBC Driver 18 for SQL Server",
         timeout: int = 30
 ):
     """
@@ -32,7 +32,7 @@ def sqlserver_connection(
         database: Nome do database
         user: Usuário
         password: Senha
-        driver: Driver ODBC (padrão: "SQL Server")
+        driver: Driver ODBC (padrão: "ODBC Driver 18 for SQL Server")
         timeout: Timeout de conexão em segundos
 
     Yields:
