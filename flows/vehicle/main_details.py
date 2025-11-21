@@ -246,7 +246,13 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         cur.close()
 
 
-@flow(name="vehicle_details_api_to_postgresql", log_prints=True)
+@flow(
+    name="vehicle_details_api_to_postgresql",
+    log_prints=True,
+    task_runner=None,
+    flow_run_name="vehicle-details-{timestamp}",
+    retries=0
+)
 @flow_alerts(
     flow_name="Placa Consulta",
     source="API Placamaster",
@@ -317,7 +323,7 @@ def main(batch_size: int = BATCH_SIZE):
             logger.info("=" * 80)
 
             # Criar artefato com resumo detalhado
-            create_table_artifact(
+                create_table_artifact(
                 key="vehicle-details-summary",
                 table={
                     "Métrica": [
