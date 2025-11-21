@@ -22,8 +22,8 @@ def postgresql_connection(
     Context manager para conexão PostgreSQL.
     Busca credenciais na seguinte ordem:
     1. Parâmetros fornecidos
-    2. Variáveis de ambiente (.env): POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD
-    3. Secrets do Prefect: postgres-host, postgres-database, postgres-user, postgres-password
+    2. Variáveis de ambiente (.env): RPA_POSTGRES_HOST, RPA_POSTGRES_DATABASE, RPA_POSTGRES_USER, RPA_POSTGRES_PASSWORD
+    3. Secrets do Prefect: rpa-postgres-host, rpa-postgres-database, rpa-postgres-user, rpa-postgres-password
 
     Args:
         host: Hostname ou IP do servidor
@@ -39,11 +39,11 @@ def postgresql_connection(
 
     Example:
         # No .env:
-        # POSTGRES_HOST=localhost
-        # POSTGRES_DATABASE=mydb
-        # POSTGRES_USER=postgres
-        # POSTGRES_PASSWORD=senha123
-        # POSTGRES_PORT=5432
+        # RPA_POSTGRES_HOST=localhost
+        # RPA_POSTGRES_DATABASE=mydb
+        # RPA_POSTGRES_USER=postgres
+        # RPA_POSTGRES_PASSWORD=senha123
+        # RPA_POSTGRES_PORT=5432
 
         with postgresql_connection(schema='bronze') as conn:
             cur = conn.cursor()
@@ -57,35 +57,35 @@ def postgresql_connection(
     try:
         # 1. Tenta variáveis de ambiente (.env)
         if not host:
-            host = os.getenv("POSTGRES_HOST")
+            host = os.getenv("RPA_POSTGRES_HOST")
         if not database:
-            database = os.getenv("POSTGRES_DATABASE")
+            database = os.getenv("RPA_POSTGRES_DATABASE")
         if not user:
-            user = os.getenv("POSTGRES_USER")
+            user = os.getenv("RPA_POSTGRES_USER")
         if not password:
-            password = os.getenv("POSTGRES_PASSWORD")
+            password = os.getenv("RPA_POSTGRES_PASSWORD")
         if not port or port == 5432:
-            port = int(os.getenv("POSTGRES_PORT", "5432"))
+            port = int(os.getenv("RPA_POSTGRES_PORT", "5432"))
 
         # 2. Se ainda não encontrou, tenta Secrets do Prefect
         if not host:
             try:
-                host = Secret.load("postgres-host").get()
+                host = Secret.load("rpa-postgres-host").get()
             except:
                 pass
         if not database:
             try:
-                database = Secret.load("postgres-database").get()
+                database = Secret.load("rpa-postgres-database").get()
             except:
                 pass
         if not user:
             try:
-                user = Secret.load("postgres-user").get()
+                user = Secret.load("rpa-postgres-user").get()
             except:
                 pass
         if not password:
             try:
-                password = Secret.load("postgres-password").get()
+                password = Secret.load("rpa-postgres-password").get()
             except:
                 pass
 
@@ -93,8 +93,8 @@ def postgresql_connection(
         if not all([host, database, user, password]):
             raise ValueError(
                 "Credenciais PostgreSQL incompletas. "
-                "Configure no .env (POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD) "
-                "ou nos Secrets do Prefect (postgres-host, postgres-database, postgres-user, postgres-password)"
+                "Configure no .env (RPA_POSTGRES_HOST, RPA_POSTGRES_DATABASE, RPA_POSTGRES_USER, RPA_POSTGRES_PASSWORD) "
+                "ou nos Secrets do Prefect (rpa-postgres-host, rpa-postgres-database, rpa-postgres-user, rpa-postgres-password)"
             )
 
         logger.info(f"🔌 Conectando PostgreSQL: {host}:{port}/{database} (schema: {schema})")
