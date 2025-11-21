@@ -5,6 +5,7 @@ from typing import Optional, List, Dict
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
+from prefect.artifacts import create_table_artifact
 from prefect.blocks.system import Secret
 from prefect.cache_policies import NONE
 from prefect.client.schemas.schedules import CronSchedule
@@ -315,7 +316,35 @@ def main(batch_size: int = BATCH_SIZE):
             logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
             logger.info("=" * 80)
 
-            return {"inserted": inserted}
+            # Criar artefato com resumo detalhado
+            create_table_artifact(
+                key="vehicle-details-summary",
+                table={
+                    "Métrica": [
+                        "✅ Inseridos",
+                        "❌ Inválidos",
+                        "⚠️ Erros",
+                        "📊 Total Processado",
+                        "⏱️ Duração"
+                    ],
+                    "Valor": [
+                        str(inserted),
+                        str(len(invalid)),
+                        str(len(failed)),
+                        str(len(plates)),
+                        f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+                    ]
+                },
+                description="Resumo da consulta de placas na API Placamaster"
+            )
+
+            return {
+                "inserted": inserted,
+                "invalid": len(invalid),
+                "failed": len(failed),
+                "total_processed": len(plates),
+                "duration_seconds": int(elapsed)
+            }
 
         except Exception as e:
             logger.error(f"❌ Erro durante processamento: {e}")

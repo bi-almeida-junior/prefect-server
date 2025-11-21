@@ -20,6 +20,7 @@ from typing import Set
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
+from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import NONE
 from prefect.client.schemas.schedules import CronSchedule
 
@@ -260,10 +261,33 @@ def main():
             logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
             logger.info("=" * 80)
 
+            # Criar artefato com resumo detalhado
+            create_table_artifact(
+                key="vehicle-consolidation-summary",
+                table={
+                    "Métrica": [
+                        "📊 Total Veículos Únicos",
+                        "✅ Novos Inseridos",
+                        "🔄 Já Consolidados",
+                        "📈 Taxa de Novos",
+                        "⏱️ Duração"
+                    ],
+                    "Valor": [
+                        str(len(df_vehicles)),
+                        str(inserted),
+                        str(len(existing_vehicles)),
+                        f"{(inserted / len(df_vehicles) * 100):.1f}%" if len(df_vehicles) > 0 else "0%",
+                        f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+                    ]
+                },
+                description="Resumo da consolidação de veículos únicos (BRZ_02 → BRZ_03)"
+            )
+
             return {
                 "inserted": inserted,
                 "total_unique": len(df_vehicles),
-                "existing": len(existing_vehicles)
+                "existing": len(existing_vehicles),
+                "duration_seconds": int(elapsed)
             }
 
         except Exception as e:

@@ -2,6 +2,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
+from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import NONE
 from prefect.client.schemas.schedules import CronSchedule
 
@@ -275,7 +276,36 @@ def main():
             logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
             logger.info("=" * 80)
 
-            return {"inserted": inserted, "stats": stats}
+            # Criar artefato com resumo detalhado
+            create_table_artifact(
+                key="vehicle-fact-summary",
+                table={
+                    "Métrica": [
+                        "📊 Total Registros",
+                        "🚗 Placas Únicas",
+                        "🏭 Marcas",
+                        "🚙 Modelos",
+                        "⏱️ Duração"
+                    ],
+                    "Valor": [
+                        str(stats.get('total_registros', 0)),
+                        str(stats.get('placas_unicas', 0)),
+                        str(stats.get('marcas', 0)),
+                        str(stats.get('modelos', 0)),
+                        f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+                    ]
+                },
+                description="Resumo da consolidação da tabela fato (detalhes + FIPE)"
+            )
+
+            return {
+                "inserted": inserted,
+                "total_registros": stats.get('total_registros', 0),
+                "placas_unicas": stats.get('placas_unicas', 0),
+                "marcas": stats.get('marcas', 0),
+                "modelos": stats.get('modelos', 0),
+                "duration_seconds": int(elapsed)
+            }
 
         except Exception as e:
             logger.error(f"❌ Erro durante processamento: {e}")

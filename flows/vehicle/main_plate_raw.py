@@ -15,6 +15,7 @@ from typing import List, Set
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import task, flow, get_run_logger
+from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import NONE
 from prefect.client.schemas.schedules import CronSchedule
 
@@ -315,10 +316,45 @@ def main():
                 logger.info(f"⏱️  Duração: {int(elapsed // 60)}m {int(elapsed % 60)}s")
                 logger.info("=" * 80)
 
+                # Criar artefato com resumo detalhado
+                create_table_artifact(
+                    key="vehicle-plate-raw-summary",
+                    table={
+                        "Métrica": [
+                            "📊 Total Placas Únicas",
+                            "✅ Novas Inseridas",
+                            "🔄 Já Existentes",
+                            "📈 Taxa de Novas",
+                            "📍 Fonte WPS",
+                            "📍 Fonte Luminus GS",
+                            "📍 Fonte Luminus NR",
+                            "📍 Fonte Luminus NS",
+                            "⏱️ Duração"
+                        ],
+                        "Valor": [
+                            str(len(df_plates)),
+                            str(inserted),
+                            str(len(existing_plates)),
+                            f"{(inserted / len(df_plates) * 100):.1f}%" if len(df_plates) > 0 else "0%",
+                            str(len(wps_plates)),
+                            str(len(gs_plates)),
+                            str(len(nr_plates)),
+                            str(len(ns_plates)),
+                            f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+                        ]
+                    },
+                    description="Resumo da consolidação de placas de múltiplas fontes"
+                )
+
                 return {
                     "inserted": inserted,
                     "total_sources": len(df_plates),
-                    "existing": len(existing_plates)
+                    "existing": len(existing_plates),
+                    "duration_seconds": int(elapsed),
+                    "wps_count": len(wps_plates),
+                    "gs_count": len(gs_plates),
+                    "nr_count": len(nr_plates),
+                    "ns_count": len(ns_plates)
                 }
 
             except Exception as e:
