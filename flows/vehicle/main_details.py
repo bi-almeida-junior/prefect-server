@@ -323,7 +323,7 @@ def main(batch_size: int = BATCH_SIZE):
             logger.info("=" * 80)
 
             # Criar artefato com resumo detalhado
-                create_table_artifact(
+            create_table_artifact(
                 key="vehicle-details-summary",
                 table={
                     "Métrica": [
