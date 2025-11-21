@@ -145,11 +145,11 @@ class PlacaAPIClient:
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36git'
         }
 
         try:
-            response = curl_requests.post(self.BASE_URL, json={"placa": plate_normalized}, headers=headers, proxies=self.proxies, impersonate="chrome110", timeout=self.TIMEOUT)
+            response = curl_requests.post(self.BASE_URL, json={"placa": plate_normalized}, headers=headers, proxies=self.proxies, impersonate="chrome124", timeout=self.TIMEOUT)
 
             # Casos irrecuperáveis
             if response.status_code == 400:
