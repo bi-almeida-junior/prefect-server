@@ -1,15 +1,131 @@
-"""
-Módulo de conexão PostgreSQL para Prefect flows
-
-Fornece funções para conectar e executar queries em bancos PostgreSQL
-"""
-
 from typing import List, Dict, Any, Optional
+from contextlib import contextmanager
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from prefect import task
 from prefect.logging import get_run_logger
 from prefect.cache_policies import NONE as NO_CACHE
+from prefect.blocks.system import Secret
+
+
+@contextmanager
+def postgresql_connection(
+        host: Optional[str] = None,
+        database: Optional[str] = None,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        port: int = 5432,
+        schema: str = "public",
+        timeout: int = 30
+):
+    """
+    Context manager para conexão PostgreSQL.
+    Busca credenciais na seguinte ordem:
+    1. Parâmetros fornecidos
+    2. Variáveis de ambiente (.env): POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD
+    3. Secrets do Prefect: postgres-host, postgres-database, postgres-user, postgres-password
+
+    Args:
+        host: Hostname ou IP do servidor
+        database: Nome do database
+        user: Usuário
+        password: Senha
+        port: Porta (padrão: 5432, ou POSTGRES_PORT do .env)
+        schema: Schema padrão (padrão: public)
+        timeout: Timeout de conexão em segundos
+
+    Yields:
+        Conexão psycopg2
+
+    Example:
+        # No .env:
+        # POSTGRES_HOST=localhost
+        # POSTGRES_DATABASE=mydb
+        # POSTGRES_USER=postgres
+        # POSTGRES_PASSWORD=senha123
+        # POSTGRES_PORT=5432
+
+        with postgresql_connection(schema='bronze') as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM tabela")
+            conn.commit()
+    """
+    import os
+    logger = get_run_logger()
+    conn = None
+
+    try:
+        # 1. Tenta variáveis de ambiente (.env)
+        if not host:
+            host = os.getenv("POSTGRES_HOST")
+        if not database:
+            database = os.getenv("POSTGRES_DATABASE")
+        if not user:
+            user = os.getenv("POSTGRES_USER")
+        if not password:
+            password = os.getenv("POSTGRES_PASSWORD")
+        if not port or port == 5432:
+            port = int(os.getenv("POSTGRES_PORT", "5432"))
+
+        # 2. Se ainda não encontrou, tenta Secrets do Prefect
+        if not host:
+            try:
+                host = Secret.load("postgres-host").get()
+            except:
+                pass
+        if not database:
+            try:
+                database = Secret.load("postgres-database").get()
+            except:
+                pass
+        if not user:
+            try:
+                user = Secret.load("postgres-user").get()
+            except:
+                pass
+        if not password:
+            try:
+                password = Secret.load("postgres-password").get()
+            except:
+                pass
+
+        # Valida se todas as credenciais foram encontradas
+        if not all([host, database, user, password]):
+            raise ValueError(
+                "Credenciais PostgreSQL incompletas. "
+                "Configure no .env (POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD) "
+                "ou nos Secrets do Prefect (postgres-host, postgres-database, postgres-user, postgres-password)"
+            )
+
+        logger.info(f"🔌 Conectando PostgreSQL: {host}:{port}/{database} (schema: {schema})")
+
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+            connect_timeout=timeout,
+            options=f'-c search_path={schema}'
+        )
+
+        # Desabilita autocommit para controle manual de transações
+        conn.autocommit = False
+
+        logger.info("✅ Conexão PostgreSQL estabelecida com sucesso")
+        yield conn
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao conectar PostgreSQL: {str(e)}")
+        raise
+
+    finally:
+        if conn:
+            try:
+                conn.close()
+                logger.info("🔒 Conexão PostgreSQL fechada")
+            except Exception as e:
+                logger.warning(f"⚠️ Aviso ao fechar conexão: {str(e)}")
 
 
 @task(retries=3, retry_delay_seconds=10)
@@ -23,7 +139,7 @@ def connect_postgresql(
         timeout: int = 30
 ):
     """
-    Estabelece conexão com PostgreSQL
+    Estabelece conexão com PostgreSQL (função legada - use postgresql_connection context manager)
 
     Args:
         host: Hostname ou IP do servidor
