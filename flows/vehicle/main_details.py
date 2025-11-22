@@ -229,17 +229,18 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         placeholders = ", ".join(["%s"] * len(PLATE_COLUMNS))
         insert_sql = f"INSERT INTO {TABLE_VEHICLE_DETAILS} ({columns_list}) VALUES ({placeholders})"
 
-        # Log de debug dos valores antes da validação
-        logger.info(f"📊 Debug - Valores antes validação:")
-        for idx, row in df.iterrows():
-            logger.info(f"  Placa: {row['DS_PLACA']} | Ano Fab: {row['NR_ANO_FABRICACAO']} (tipo: {type(row['NR_ANO_FABRICACAO'])}) | Ano Modelo: {row['NR_ANO_MODELO']} (tipo: {type(row['NR_ANO_MODELO'])})")
-
-        # Validação de valores INTEGER antes da inserção
+        # Validação e conversão de valores INTEGER antes da inserção
         integer_cols = ['NR_ANO_FABRICACAO', 'NR_ANO_MODELO']
+
+        # Substitui NaN por None e converte floats para int
+        for col in integer_cols:
+            df[col] = df[col].apply(lambda x: None if pd.isna(x) else int(x) if isinstance(x, float) else x)
+
+        # Valida range do PostgreSQL INTEGER
         for idx, row in df.iterrows():
             for col in integer_cols:
                 val = row[col]
-                if val is not None and not pd.isna(val):
+                if val is not None:
                     try:
                         int_val = int(val)
                         if int_val < -2147483648 or int_val > 2147483647:
@@ -250,11 +251,6 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
                         df.at[idx, col] = None
 
         records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
-
-        # Log de debug dos records finais
-        logger.info(f"📊 Debug - Records finais (primeiros 2):")
-        for i, rec in enumerate(records[:2]):
-            logger.info(f"  Record {i}: {rec}")
 
         cur.executemany(insert_sql, records)
 
@@ -381,17 +377,17 @@ def main(batch_size: int = BATCH_SIZE):
 
 if __name__ == "__main__":
     # Execução local
-    main()
+    # main()
 
-    # main.from_source(
-    #     source=".",
-    #     entrypoint="flows/vehicle/main_details.py:main"
-    # ).deploy(
-    #     name="vehicle-details-api-to-postgresql",
-    #     work_pool_name="local-pool",
-    #     schedules=[CronSchedule(cron="*/3 * * * *", timezone="America/Sao_Paulo")],
-    #     tags=["rpa", "api", "postgresql", "dw_rpa"],
-    #     parameters={},
-    #     description="🚘 AnyCar API → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min).",
-    #     version="4.0.0"
-    # )
+    main.from_source(
+        source=".",
+        entrypoint="flows/vehicle/main_details.py:main"
+    ).deploy(
+        name="vehicle-details-api-to-postgresql",
+        work_pool_name="local-pool",
+        schedules=[CronSchedule(cron="*/3 * * * *", timezone="America/Sao_Paulo")],
+        tags=["rpa", "api", "postgresql", "dw_rpa"],
+        parameters={},
+        description="🚘 AnyCar API → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min).",
+        version="4.0.0"
+    )
