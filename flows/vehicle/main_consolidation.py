@@ -217,7 +217,7 @@ def insert_new_vehicles(conn, df: pd.DataFrame, existing_vehicles: Set[tuple]) -
     flow_name="Consolidação Veículos",
     source="PostgreSQL (BRZ_02_VEICULO_DETALHE)",
     destination="PostgreSQL (BRZ_03_VEICULO_CONSOLIDADO)",
-    extract_summary=lambda result: {"vehicles_consolidated": result.get("inserted", 0)}
+    extract_summary=lambda result: {"records_loaded": result.get("inserted", 0)}
 )
 def main():
     """Flow: Consolida veículos únicos para consulta FIPE."""
