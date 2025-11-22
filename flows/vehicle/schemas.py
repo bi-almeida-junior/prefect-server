@@ -141,14 +141,22 @@ class PlateRecord(BaseModel):
 
 
 def _safe_int(value: Any) -> Optional[int]:
-    """Converte valor para int, retorna None se inválido."""
+    """Converte valor para int, retorna None se inválido ou fora do range PostgreSQL INTEGER."""
     if value is None:
         return None
     try:
         # Se for string mascarada (ex: "****"), retorna None
         if isinstance(value, str) and not value.replace("*", "").strip():
             return None
-        return int(value)
+
+        num = int(value)
+
+        # Valida range para PostgreSQL INTEGER (-2147483648 a 2147483647)
+        # Para anos, validamos range razoável: 1900 a 2100
+        if num < 1900 or num > 2100:
+            return None
+
+        return num
     except (ValueError, TypeError):
         return None
 
