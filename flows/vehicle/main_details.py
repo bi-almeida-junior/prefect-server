@@ -176,11 +176,11 @@ def process_plates(plates: List[PlateRecord], client: AnyCarAPIClient) -> Dict:
                 current_time = time.time()
             request_timestamps.pop(0)
 
-        # Intervalo mínimo entre requests
-        if request_timestamps:
-            time_since_last = current_time - request_timestamps[-1]
-            if time_since_last < 10:
-                time.sleep(10 - time_since_last)
+        # Intervalo mínimo entre requests (comentado para AnyCar - delay já está no client)
+        # if request_timestamps:
+        #     time_since_last = current_time - request_timestamps[-1]
+        #     if time_since_last < 10:
+        #         time.sleep(10 - time_since_last)
 
         # Consulta API
         vehicle_data = client.query_plate(plate)
