@@ -180,12 +180,16 @@ def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -
     """
     color = vehicle_data.get("cor")
 
+    # Converte anos com validação e retorna int Python nativo (não numpy.int64)
+    ano_fab = _safe_int(vehicle_data.get("ano"))
+    ano_modelo = _safe_int(vehicle_data.get("anoModelo"))
+
     return {
         "DS_PLACA": plate,
         "DS_MARCA": vehicle_data.get("marca"),
         "DS_MODELO": vehicle_data.get("modelo"),
-        "NR_ANO_FABRICACAO": _safe_int(vehicle_data.get("ano")),
-        "NR_ANO_MODELO": _safe_int(vehicle_data.get("anoModelo")),
+        "NR_ANO_FABRICACAO": int(ano_fab) if ano_fab is not None else None,
+        "NR_ANO_MODELO": int(ano_modelo) if ano_modelo is not None else None,
         "DS_COR": color.upper() if color else None,
         "DT_COLETA_API": get_datetime_brasilia()
     }

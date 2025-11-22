@@ -229,6 +229,11 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         placeholders = ", ".join(["%s"] * len(PLATE_COLUMNS))
         insert_sql = f"INSERT INTO {TABLE_VEHICLE_DETAILS} ({columns_list}) VALUES ({placeholders})"
 
+        # Log de debug dos valores antes da validação
+        logger.info(f"📊 Debug - Valores antes validação:")
+        for idx, row in df.iterrows():
+            logger.info(f"  Placa: {row['DS_PLACA']} | Ano Fab: {row['NR_ANO_FABRICACAO']} (tipo: {type(row['NR_ANO_FABRICACAO'])}) | Ano Modelo: {row['NR_ANO_MODELO']} (tipo: {type(row['NR_ANO_MODELO'])})")
+
         # Validação de valores INTEGER antes da inserção
         integer_cols = ['NR_ANO_FABRICACAO', 'NR_ANO_MODELO']
         for idx, row in df.iterrows():
@@ -240,11 +245,16 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
                         if int_val < -2147483648 or int_val > 2147483647:
                             logger.warning(f"⚠️ Placa {row['DS_PLACA']}: {col}={int_val} fora do range INTEGER, ajustando para NULL")
                             df.at[idx, col] = None
-                    except (ValueError, TypeError, OverflowError):
-                        logger.warning(f"⚠️ Placa {row['DS_PLACA']}: {col}={val} inválido, ajustando para NULL")
+                    except (ValueError, TypeError, OverflowError) as e:
+                        logger.warning(f"⚠️ Placa {row['DS_PLACA']}: {col}={val} inválido ({e}), ajustando para NULL")
                         df.at[idx, col] = None
 
         records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
+
+        # Log de debug dos records finais
+        logger.info(f"📊 Debug - Records finais (primeiros 2):")
+        for i, rec in enumerate(records[:2]):
+            logger.info(f"  Record {i}: {rec}")
 
         cur.executemany(insert_sql, records)
 
