@@ -423,17 +423,17 @@ def main(batch_size: int = BATCH_SIZE):
 
 if __name__ == "__main__":
     # Execução local
-    main()
+    # main()
 
-    # main.from_source(
-    #     source=".",
-    #     entrypoint="flows/vehicle/main_details.py:main"
-    # ).deploy(
-    #     name="vehicle-details-api-to-postgresql",
-    #     work_pool_name="local-pool",
-    #     schedules=[CronSchedule(cron="*/3 * * * *", timezone="America/Sao_Paulo")],
-    #     tags=["rpa", "api", "postgresql", "dw_rpa"],
-    #     parameters={},
-    #     description="🚘 AnyCar API → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min).",
-    #     version="4.0.0"
-    # )
+    main.from_source(
+        source=".",
+        entrypoint="flows/vehicle/main_details.py:main"
+    ).deploy(
+        name="vehicle-details-api-to-postgresql",
+        work_pool_name="local-pool",
+        schedules=[CronSchedule(cron="*/3 * * * *", timezone="America/Sao_Paulo")],
+        tags=["rpa", "api", "postgresql", "dw_rpa"],
+        parameters={},
+        description="🚘 AnyCar API → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min).",
+        version="4.0.0"
+    )
