@@ -229,49 +229,29 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         placeholders = ", ".join(["%s"] * len(PLATE_COLUMNS))
         insert_sql = f"INSERT INTO {TABLE_VEHICLE_DETAILS} ({columns_list}) VALUES ({placeholders})"
 
-        # Substitui NaN por None e valida range
-        integer_cols = ['NR_ANO_FABRICACAO', 'NR_ANO_MODELO']
-        for col in integer_cols:
-            df[col] = df[col].apply(lambda x: None if pd.isna(x) else x)
-
-        # Debug: Log todos os valores antes da inserção
-        for idx, row in df.iterrows():
-            for col in PLATE_COLUMNS:
-                val = row[col]
-                if col in integer_cols and val is not None:
-                    # Valida se é inteiro válido
-                    if not isinstance(val, int) or val < -2147483648 or val > 2147483647:
-                        logger.warning(f"⚠️ Placa {row['DS_PLACA']}: {col}={val} (tipo: {type(val).__name__}) fora do range, ajustando para NULL")
-                        df.at[idx, col] = None
-
-        # Converte para tipos Python nativos (evita numpy.int64)
-        def to_native(val):
-            """Converte valores para tipos Python nativos."""
+        # Converte colunas de ano: float -> int, NaN -> None
+        def convert_year(val):
             if pd.isna(val):
                 return None
-            if isinstance(val, (pd.Timestamp, datetime)):
-                return val.to_pydatetime() if hasattr(val, 'to_pydatetime') else val
-            if hasattr(val, 'item'):  # numpy types
-                return val.item()
-            return val
+            try:
+                year = int(float(val))
+                # Valida range PostgreSQL INTEGER
+                if year < -2147483648 or year > 2147483647:
+                    return None
+                # Valida range razoável para anos
+                if year < 1900 or year > 2100:
+                    return None
+                return year
+            except (ValueError, TypeError, OverflowError):
+                return None
 
-        records = [tuple(to_native(row[col]) for col in PLATE_COLUMNS) for _, row in df.iterrows()]
+        df['NR_ANO_FABRICACAO'] = df['NR_ANO_FABRICACAO'].apply(convert_year)
+        df['NR_ANO_MODELO'] = df['NR_ANO_MODELO'].apply(convert_year)
 
-        # Tenta inserir todos de uma vez
-        try:
-            cur.executemany(insert_sql, records)
-        except Exception as e:
-            logger.error(f"Erro no batch insert: {e}")
-            # Tenta inserir um por um para identificar o problema
-            logger.info("Tentando inserir um por um para identificar o registro problemático...")
-            for i, (record, (_, row)) in enumerate(zip(records, df.iterrows()), 1):
-                try:
-                    logger.info(f"Inserindo registro {i}/{len(records)}: Placa={row['DS_PLACA']}, dados={record}")
-                    cur.execute(insert_sql, record)
-                except Exception as e2:
-                    logger.error(f"❌ Erro no registro {i} (Placa={row['DS_PLACA']}): {e2}")
-                    logger.error(f"   Dados: {dict(zip(PLATE_COLUMNS, record))}")
-                    raise
+        # Converte DataFrame para lista de tuplas
+        records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
+
+        cur.executemany(insert_sql, records)
 
         if commit:
             conn.commit()
