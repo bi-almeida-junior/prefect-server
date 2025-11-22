@@ -1,11 +1,15 @@
 import re
 import time
 import random
+import warnings
 from typing import Optional, List, Dict, Any
 
 import requests
 from curl_cffi import requests as curl_requests
 from prefect import get_run_logger
+
+# Suprime warnings do curl_cffi sobre proxy
+warnings.filterwarnings('ignore', message='Make sure you are using https over https proxy')
 
 
 class FipeAPIClient:
