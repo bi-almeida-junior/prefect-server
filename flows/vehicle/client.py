@@ -117,6 +117,7 @@ class AnyCarAPIClient:
     """Cliente para consultar a API AnyCar com retry robusto."""
 
     BASE_URL = "https://api-v2.anycar.com.br/site/test-drive"
+    HOME_URL = "https://anycar.com.br"
     TIMEOUT = 30
     MAX_RETRIES = 5
     RETRY_BACKOFF = 15
@@ -124,6 +125,8 @@ class AnyCarAPIClient:
     def __init__(self, proxies: Optional[Dict[str, str]] = None):
         self.proxies = proxies
         self.logger = get_run_logger()
+        self.session = None
+        self._establish_session()
 
     def validate_plate(self, plate: str) -> Optional[str]:
         """Valida e normaliza placa."""
@@ -147,24 +150,52 @@ class AnyCarAPIClient:
             return f"{plate[:3]}-{plate[3:]}"
         return plate
 
+    def _establish_session(self):
+        """Estabelece sessão visitando a home page para obter cookies."""
+        try:
+            self.session = curl_requests.Session()
+            # Visita home page para obter cookies de sessão
+            self.session.get(
+                self.HOME_URL,
+                proxies=self.proxies,
+                impersonate="chrome124",
+                timeout=15
+            )
+            # Delay humano após visitar home
+            time.sleep(random.uniform(1, 2))
+            self.logger.info("✓ Sessão estabelecida com AnyCar")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Erro ao estabelecer sessão: {e}")
+            self.session = curl_requests.Session()
+
     def _query_once(self, plate_normalized: str) -> Optional[Dict[str, Any]]:
         """Executa uma única requisição à API AnyCar."""
         headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
             'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'Origin': 'https://anycar.com.br',
+            'Referer': 'https://anycar.com.br/',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-site',
+            'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
         }
 
         try:
             # Adiciona hífen na placa
             plate_with_hyphen = self._format_plate_with_hyphen(plate_normalized)
 
-            # POST para obter ID
-            response_post = curl_requests.post(
+            # POST para obter ID (usando session)
+            response_post = self.session.post(
                 self.BASE_URL,
                 json={"placa": plate_with_hyphen},
                 headers=headers,
-                # proxies=self.proxies,  # Sem proxy nessa API
+                proxies=self.proxies,
                 impersonate="chrome124",
                 timeout=self.TIMEOUT
             )
@@ -195,11 +226,11 @@ class AnyCarAPIClient:
                 # Aguarda delay randômico entre 1-3 segundos antes do GET
                 time.sleep(random.uniform(1, 3))
 
-                # GET com o ID
-                response_get = curl_requests.get(
+                # GET com o ID (usando session)
+                response_get = self.session.get(
                     f"{self.BASE_URL}/{vehicle_id}",
                     headers=headers,
-                    # proxies=self.proxies,  # Sem proxy nessa API
+                    proxies=self.proxies,
                     impersonate="chrome124",
                     timeout=self.TIMEOUT
                 )
