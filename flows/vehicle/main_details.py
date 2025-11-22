@@ -270,6 +270,7 @@ def main(batch_size: int = BATCH_SIZE):
         try:
             # Busca pendentes
             plates = get_pending_plates(conn, batch_size)
+            logger.info(plates)
 
             # Exemplo pronto para utilizar em debug manual afim de validar alguma placa específica
             # plates = PlateRecord(
