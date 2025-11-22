@@ -187,6 +187,7 @@ class AnyCarAPIClient:
             if response_post.status_code == 200:
                 data_post = response_post.json()
                 if not data_post.get("status") or not data_post.get("id"):
+                    self.logger.info(response_post.json())
                     return {"status": "invalid", "reason": "NO_ID_RETURNED"}
 
                 vehicle_id = data_post["id"]
