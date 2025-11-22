@@ -1,5 +1,6 @@
 import re
 import time
+import random
 from typing import Optional, List, Dict, Any
 
 import requests
@@ -110,6 +111,170 @@ class FipeAPIClient:
             return None
 
         return result
+
+
+class AnyCarAPIClient:
+    """Cliente para consultar a API AnyCar com retry robusto."""
+
+    BASE_URL = "https://api-v2.anycar.com.br/site/test-drive"
+    TIMEOUT = 30
+    MAX_RETRIES = 5
+    RETRY_BACKOFF = 15
+
+    def __init__(self, proxies: Optional[Dict[str, str]] = None):
+        self.proxies = proxies
+        self.logger = get_run_logger()
+
+    def validate_plate(self, plate: str) -> Optional[str]:
+        """Valida e normaliza placa."""
+        if not plate:
+            return None
+
+        plate_clean = plate.replace("-", "").replace(" ", "").upper().strip()
+
+        # Padrão Antigo: ABC1234
+        pattern_old = r'^[A-Z]{3}\d{4}$'
+        # Padrão Mercosul: ABC1D23
+        pattern_mercosul = r'^[A-Z]{3}\d[A-Z]\d{2}$'
+
+        if re.match(pattern_old, plate_clean) or re.match(pattern_mercosul, plate_clean):
+            return plate_clean
+        return None
+
+    def _format_plate_with_hyphen(self, plate: str) -> str:
+        """Formata placa com hífen (ABC-1234 ou ABC-1D23)."""
+        if len(plate) == 7:
+            return f"{plate[:3]}-{plate[3:]}"
+        return plate
+
+    def _query_once(self, plate_normalized: str) -> Optional[Dict[str, Any]]:
+        """Executa uma única requisição à API AnyCar."""
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+
+        try:
+            # Adiciona hífen na placa
+            plate_with_hyphen = self._format_plate_with_hyphen(plate_normalized)
+
+            # POST para obter ID
+            response_post = curl_requests.post(
+                self.BASE_URL,
+                json={"placa": plate_with_hyphen},
+                headers=headers,
+                # proxies=self.proxies,  # Sem proxy nessa API
+                impersonate="chrome124",
+                timeout=self.TIMEOUT
+            )
+
+            # Casos irrecuperáveis
+            if response_post.status_code == 400:
+                return {"status": "invalid", "reason": "400_INVALID_DATA"}
+            if response_post.status_code == 404:
+                return {"status": "invalid", "reason": "404_NOT_FOUND"}
+            if response_post.status_code == 403:
+                return {"status": "invalid", "reason": "403_FORBIDDEN"}
+            if response_post.status_code >= 500:
+                return {"status": "invalid", "reason": f"{response_post.status_code}_SERVER_ERROR"}
+
+            # Rate limit
+            if response_post.status_code == 429:
+                return {"status": 429}
+
+            # Sucesso no POST - extrai ID
+            if response_post.status_code == 200:
+                data_post = response_post.json()
+                if not data_post.get("status") or not data_post.get("id"):
+                    return {"status": "invalid", "reason": "NO_ID_RETURNED"}
+
+                vehicle_id = data_post["id"]
+
+                # Aguarda delay randômico entre 1-3 segundos antes do GET
+                time.sleep(random.uniform(1, 3))
+
+                # GET com o ID
+                response_get = curl_requests.get(
+                    f"{self.BASE_URL}/{vehicle_id}",
+                    headers=headers,
+                    # proxies=self.proxies,  # Sem proxy nessa API
+                    impersonate="chrome124",
+                    timeout=self.TIMEOUT
+                )
+
+                if response_get.status_code == 200:
+                    data_get = response_get.json()
+                    if data_get.get("status") and data_get.get("data"):
+                        vehicle_data = data_get["data"]
+
+                        # Verifica se encontrou dados
+                        if not vehicle_data.get("encontrado"):
+                            return {"status": "invalid", "reason": "NOT_FOUND_IN_DATABASE"}
+
+                        # Transforma para o formato esperado
+                        return {
+                            "marca": vehicle_data.get("marca"),
+                            "modelo": vehicle_data.get("modelo"),
+                            "ano": vehicle_data.get("anoFabricacao"),
+                            "anoModelo": vehicle_data.get("anoModelo"),
+                            "cor": vehicle_data.get("cor")
+                        }
+                    return {"status": "invalid", "reason": "EMPTY_DATA"}
+
+                # Erros no GET
+                if response_get.status_code == 429:
+                    return {"status": 429}
+                if response_get.status_code >= 500:
+                    return {"status": "invalid", "reason": f"GET_{response_get.status_code}_SERVER_ERROR"}
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Erro na requisição: {e}")
+            return None
+
+    def query_plate(self, plate: str) -> Optional[Dict[str, Any]]:
+        """
+        Consulta dados de uma placa com retry robusto para 429.
+
+        Returns:
+            - Dict com dados do veículo se sucesso
+            - {"status": "invalid", "reason": "..."} se inválido (não retenta)
+            - None para erro após todas as tentativas
+        """
+        plate_normalized = self.validate_plate(plate)
+
+        if not plate_normalized:
+            self.logger.warning(f"[{plate}] Formato inválido")
+            return {"status": "invalid", "reason": "INVALID_PLATE_FORMAT"}
+
+        # Retry robusto
+        attempts = 0
+        while attempts < self.MAX_RETRIES:
+            result = self._query_once(plate_normalized)
+
+            # Caso inválido: retorna imediatamente (não retenta)
+            if result and result.get("status") == "invalid":
+                return result
+
+            # Rate limit 429: retenta com backoff
+            if result and result.get("status") == 429:
+                attempts += 1
+                if attempts < self.MAX_RETRIES:
+                    backoff_time = self.RETRY_BACKOFF + (attempts * 5)
+                    self.logger.warning(f"[{plate}] 429 - Retry {attempts}/{self.MAX_RETRIES} em {backoff_time}s")
+                    time.sleep(backoff_time)
+                else:
+                    self.logger.error(f"[{plate}] FALHOU após {self.MAX_RETRIES} tentativas (429)")
+                    return None
+            # Sucesso ou outro erro: retorna
+            else:
+                if attempts > 0:
+                    self.logger.info(f"[{plate}] ✓ Sucesso após {attempts} retry(s)")
+                return result
+
+        return None
 
 
 class PlacaAPIClient:

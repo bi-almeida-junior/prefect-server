@@ -10,7 +10,7 @@ from prefect.blocks.system import Secret
 from prefect.cache_policies import NONE
 from prefect.client.schemas.schedules import CronSchedule
 
-from flows.vehicle.client import PlacaAPIClient
+from flows.vehicle.client import AnyCarAPIClient
 from flows.vehicle.schemas import PlateRecord, transform_plate_to_snowflake_row
 from shared.connections.postgresql import postgresql_connection
 from shared.decorators import flow_alerts
@@ -19,7 +19,7 @@ from shared.utils import get_datetime_brasilia
 load_dotenv()
 
 # Constantes
-BATCH_SIZE = 25
+BATCH_SIZE = 10
 RATE_LIMIT_PER_MIN = 5
 SCHEMA = "public"
 
@@ -142,7 +142,7 @@ def update_status(conn, plates: List[str], status: str, reasons: Optional[Dict[s
 
 
 @task(name="process_plates", log_prints=True, cache_policy=NONE)
-def process_plates(plates: List[PlateRecord], client: PlacaAPIClient) -> Dict:
+def process_plates(plates: List[PlateRecord], client: AnyCarAPIClient) -> Dict:
     """Processa lote de placas com rate limit."""
     logger = get_run_logger()
 
@@ -249,12 +249,12 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
 @flow(name="vehicle_details_api_to_postgresql", log_prints=True)
 @flow_alerts(
     flow_name="Placa Consulta",
-    source="API Placamaster",
+    source="API AnyCar",
     destination="PostgreSQL (BRONZE)",
     extract_summary=lambda result: {"records_loaded": result.get("inserted", 0)}
 )
 def main(batch_size: int = BATCH_SIZE):
-    """Flow: Consulta API Placamaster e insere no PostgreSQL."""
+    """Flow: Consulta API AnyCar e insere no PostgreSQL."""
     logger = get_run_logger()
     start_time = datetime.now()
 
@@ -264,7 +264,7 @@ def main(batch_size: int = BATCH_SIZE):
 
     # Proxy
     proxies = load_proxy()
-    client = PlacaAPIClient(proxies)
+    client = AnyCarAPIClient(proxies)
 
     with postgresql_connection(schema=SCHEMA) as conn:
         try:
@@ -355,17 +355,17 @@ def main(batch_size: int = BATCH_SIZE):
 
 if __name__ == "__main__":
     # Execução local
-    # main()
+    main()
 
-    main.from_source(
-        source=".",
-        entrypoint="flows/vehicle/main_details.py:main"
-    ).deploy(
-        name="vehicle-details-api-to-postgresql",
-        work_pool_name="local-pool",
-        schedules=[CronSchedule(cron="*/10 * * * *", timezone="America/Sao_Paulo")],
-        tags=["rpa", "api", "postgresql", "dw_rpa"],
-        parameters={},
-        description="🚘 Placamaster → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min), bypass Cloudflare.",
-        version="3.0.0"
-    )
+    # main.from_source(
+    #     source=".",
+    #     entrypoint="flows/vehicle/main_details.py:main"
+    # ).deploy(
+    #     name="vehicle-details-api-to-postgresql",
+    #     work_pool_name="local-pool",
+    #     schedules=[CronSchedule(cron="*/10 * * * *", timezone="America/Sao_Paulo")],
+    #     tags=["rpa", "api", "postgresql", "dw_rpa"],
+    #     parameters={},
+    #     description="🚘 AnyCar API → PostgreSQL | Consulta detalhes de veículos por placa e carrega no Bronze. Rate limit (5 req/min).",
+    #     version="4.0.0"
+    # )

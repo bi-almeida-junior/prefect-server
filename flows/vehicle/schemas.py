@@ -142,7 +142,7 @@ class PlateRecord(BaseModel):
 
 def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Transforma dados da API Placamaster para formato Snowflake.
+    Transforma dados da API AnyCar para formato Snowflake.
 
     Args:
         plate: Placa do veículo
@@ -157,8 +157,8 @@ def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -
         "DS_PLACA": plate,
         "DS_MARCA": vehicle_data.get("marca"),
         "DS_MODELO": vehicle_data.get("modelo"),
-        "NR_ANO_FABRICACAO": vehicle_data.get("ano_fabricacao"),
-        "NR_ANO_MODELO": vehicle_data.get("ano_modelo"),
+        "NR_ANO_FABRICACAO": vehicle_data.get("ano"),  # AnyCar usa "ano"
+        "NR_ANO_MODELO": vehicle_data.get("anoModelo"),  # AnyCar usa "anoModelo"
         "DS_COR": color.upper() if color else None,
         "DT_COLETA_API": get_datetime_brasilia()
     }
