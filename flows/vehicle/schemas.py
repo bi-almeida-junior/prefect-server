@@ -146,18 +146,24 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
     try:
         # Se for string mascarada (ex: "****"), retorna None
-        if isinstance(value, str) and not value.replace("*", "").strip():
-            return None
+        if isinstance(value, str):
+            # Remove espaços e verifica se está vazio ou só tem asteriscos
+            cleaned = value.replace("*", "").replace("-", "").strip()
+            if not cleaned:
+                return None
 
         num = int(value)
 
-        # Valida range para PostgreSQL INTEGER (-2147483648 a 2147483647)
-        # Para anos, validamos range razoável: 1900 a 2100
+        # Valida range para PostgreSQL INTEGER PRIMEIRO
+        if num < -2147483648 or num > 2147483647:
+            return None
+
+        # Depois valida range razoável para anos
         if num < 1900 or num > 2100:
             return None
 
         return num
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
