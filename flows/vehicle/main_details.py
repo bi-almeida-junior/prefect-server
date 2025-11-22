@@ -354,7 +354,7 @@ def main(batch_size: int = BATCH_SIZE):
 
 
 if __name__ == "__main__":
-    # Execução local
+    # execução local
     main()
 
     # main.from_source(

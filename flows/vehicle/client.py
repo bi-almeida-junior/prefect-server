@@ -192,13 +192,13 @@ class AnyCarAPIClient:
                 vehicle_id = data_post["id"]
 
                 # Aguarda delay randômico entre 1-3 segundos antes do GET
-                time.sleep(random.uniform(0.5, 1))
+                time.sleep(random.uniform(1, 3))
 
                 # GET com o ID
                 response_get = curl_requests.get(
                     f"{self.BASE_URL}/{vehicle_id}",
                     headers=headers,
-                    proxies=self.proxies,  # Sem proxy nessa API
+                    # proxies=self.proxies,  # Sem proxy nessa API
                     impersonate="chrome124",
                     timeout=self.TIMEOUT
                 )
