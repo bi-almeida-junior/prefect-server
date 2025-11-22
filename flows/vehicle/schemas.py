@@ -152,9 +152,15 @@ def _safe_int(value: Any) -> Optional[int]:
             if not cleaned:
                 return None
 
+        # Se for float, valida antes de converter
+        if isinstance(value, float):
+            # Verifica se é infinito ou NaN
+            if not (-2147483648.0 <= value <= 2147483647.0):
+                return None
+
         num = int(value)
 
-        # Valida range para PostgreSQL INTEGER PRIMEIRO
+        # Valida range para PostgreSQL INTEGER
         if num < -2147483648 or num > 2147483647:
             return None
 
@@ -188,8 +194,8 @@ def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -
         "DS_PLACA": plate,
         "DS_MARCA": vehicle_data.get("marca"),
         "DS_MODELO": vehicle_data.get("modelo"),
-        "NR_ANO_FABRICACAO": int(ano_fab) if ano_fab is not None else None,
-        "NR_ANO_MODELO": int(ano_modelo) if ano_modelo is not None else None,
+        "NR_ANO_FABRICACAO": ano_fab,
+        "NR_ANO_MODELO": ano_modelo,
         "DS_COR": color.upper() if color else None,
         "DT_COLETA_API": get_datetime_brasilia()
     }

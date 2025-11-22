@@ -229,26 +229,10 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         placeholders = ", ".join(["%s"] * len(PLATE_COLUMNS))
         insert_sql = f"INSERT INTO {TABLE_VEHICLE_DETAILS} ({columns_list}) VALUES ({placeholders})"
 
-        # Validação e conversão de valores INTEGER antes da inserção
+        # Substitui NaN por None (validação de range já feita em schemas.py)
         integer_cols = ['NR_ANO_FABRICACAO', 'NR_ANO_MODELO']
-
-        # Substitui NaN por None e converte floats para int
         for col in integer_cols:
-            df[col] = df[col].apply(lambda x: None if pd.isna(x) else int(x) if isinstance(x, float) else x)
-
-        # Valida range do PostgreSQL INTEGER
-        for idx, row in df.iterrows():
-            for col in integer_cols:
-                val = row[col]
-                if val is not None:
-                    try:
-                        int_val = int(val)
-                        if int_val < -2147483648 or int_val > 2147483647:
-                            logger.warning(f"⚠️ Placa {row['DS_PLACA']}: {col}={int_val} fora do range INTEGER, ajustando para NULL")
-                            df.at[idx, col] = None
-                    except (ValueError, TypeError, OverflowError) as e:
-                        logger.warning(f"⚠️ Placa {row['DS_PLACA']}: {col}={val} inválido ({e}), ajustando para NULL")
-                        df.at[idx, col] = None
+            df[col] = df[col].apply(lambda x: None if pd.isna(x) else x)
 
         records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
 
