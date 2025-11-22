@@ -192,7 +192,7 @@ class AnyCarAPIClient:
                 vehicle_id = data_post["id"]
 
                 # Aguarda delay randômico entre 1-3 segundos antes do GET
-                time.sleep(random.uniform(1, 3))
+                time.sleep(random.uniform(0.5, 1))
 
                 # GET com o ID
                 response_get = curl_requests.get(

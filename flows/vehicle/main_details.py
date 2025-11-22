@@ -169,12 +169,12 @@ def process_plates(plates: List[PlateRecord], client: AnyCarAPIClient) -> Dict:
         # Rate limit: janela de 60s
         request_timestamps = [t for t in request_timestamps if current_time - t < 60]
 
-        if len(request_timestamps) >= RATE_LIMIT_PER_MIN:
-            wait_time = 60 - (current_time - request_timestamps[0])
-            if wait_time > 0:
-                time.sleep(wait_time)
-                current_time = time.time()
-            request_timestamps.pop(0)
+        # if len(request_timestamps) >= RATE_LIMIT_PER_MIN:
+        #     wait_time = 60 - (current_time - request_timestamps[0])
+        #     if wait_time > 0:
+        #         time.sleep(wait_time)
+        #         current_time = time.time()
+        #     request_timestamps.pop(0)
 
         # Intervalo mínimo entre requests (comentado para AnyCar - delay já está no client)
         # if request_timestamps:
