@@ -273,8 +273,19 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
             logger.info(f"  ANO_MODELO (convertido): {row.get('NR_ANO_MODELO')} | Tipo: {type(row.get('NR_ANO_MODELO'))}")
         logger.info("=" * 80)
 
-        # Converte DataFrame para lista de tuplas
-        records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
+        # Converte DataFrame para lista de tuplas, garantindo que valores numéricos sejam int ou None
+        def safe_value(val):
+            """Converte float para int, mantém None e strings."""
+            if pd.isna(val):
+                return None
+            if isinstance(val, float):
+                return int(val)
+            return val
+
+        records = [
+            tuple(safe_value(row[col]) for col in PLATE_COLUMNS)
+            for _, row in df.iterrows()
+        ]
 
         # LOG: Records finais antes do INSERT
         logger.info("=" * 80)
