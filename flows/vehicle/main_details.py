@@ -229,6 +229,19 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         placeholders = ", ".join(["%s"] * len(PLATE_COLUMNS))
         insert_sql = f"INSERT INTO {TABLE_VEHICLE_DETAILS} ({columns_list}) VALUES ({placeholders})"
 
+        # LOG: DataFrame original antes da conversão
+        logger.info("=" * 80)
+        logger.info("📊 DADOS ANTES DA CONVERSÃO:")
+        logger.info(f"Total de registros: {len(df)}")
+        for idx, row in df.iterrows():
+            logger.info(f"\n[Registro {idx}] PLACA: {row.get('DS_PLACA', 'N/A')}")
+            logger.info(f"  MARCA: {row.get('DS_MARCA', 'N/A')}")
+            logger.info(f"  MODELO: {row.get('DS_MODELO', 'N/A')}")
+            logger.info(f"  ANO_FABRICACAO (raw): {row.get('NR_ANO_FABRICACAO')} | Tipo: {type(row.get('NR_ANO_FABRICACAO'))}")
+            logger.info(f"  ANO_MODELO (raw): {row.get('NR_ANO_MODELO')} | Tipo: {type(row.get('NR_ANO_MODELO'))}")
+            logger.info(f"  COR: {row.get('DS_COR', 'N/A')}")
+        logger.info("=" * 80)
+
         # Converte colunas de ano: float -> int, NaN -> None
         def convert_year(val):
             if pd.isna(val):
@@ -237,19 +250,41 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
                 year = int(float(val))
                 # Valida range PostgreSQL INTEGER
                 if year < -2147483648 or year > 2147483647:
+                    logger.warning(f"⚠️ Ano fora do range PostgreSQL INTEGER: {year}")
                     return None
                 # Valida range razoável para anos
                 if year < 1900 or year > 2100:
+                    logger.warning(f"⚠️ Ano fora do range razoável (1900-2100): {year}")
                     return None
                 return year
-            except (ValueError, TypeError, OverflowError):
+            except (ValueError, TypeError, OverflowError) as e:
+                logger.warning(f"⚠️ Erro ao converter ano '{val}': {e}")
                 return None
 
         df['NR_ANO_FABRICACAO'] = df['NR_ANO_FABRICACAO'].apply(convert_year)
         df['NR_ANO_MODELO'] = df['NR_ANO_MODELO'].apply(convert_year)
 
+        # LOG: DataFrame após conversão
+        logger.info("=" * 80)
+        logger.info("📊 DADOS APÓS CONVERSÃO:")
+        for idx, row in df.iterrows():
+            logger.info(f"\n[Registro {idx}] PLACA: {row.get('DS_PLACA', 'N/A')}")
+            logger.info(f"  ANO_FABRICACAO (convertido): {row.get('NR_ANO_FABRICACAO')} | Tipo: {type(row.get('NR_ANO_FABRICACAO'))}")
+            logger.info(f"  ANO_MODELO (convertido): {row.get('NR_ANO_MODELO')} | Tipo: {type(row.get('NR_ANO_MODELO'))}")
+        logger.info("=" * 80)
+
         # Converte DataFrame para lista de tuplas
         records = [tuple(row[col] for col in PLATE_COLUMNS) for _, row in df.iterrows()]
+
+        # LOG: Records finais antes do INSERT
+        logger.info("=" * 80)
+        logger.info("📝 RECORDS PARA INSERT:")
+        logger.info(f"SQL: {insert_sql}")
+        for i, record in enumerate(records):
+            logger.info(f"\n[Record {i}]:")
+            for j, (col, val) in enumerate(zip(PLATE_COLUMNS, record)):
+                logger.info(f"  {col}: {val} | Tipo: {type(val)} | Repr: {repr(val)}")
+        logger.info("=" * 80)
 
         cur.executemany(insert_sql, records)
 
@@ -260,7 +295,9 @@ def insert_plate_data(conn, df: pd.DataFrame, commit: bool = False) -> int:
         return cur.rowcount
 
     except Exception as e:
-        logger.error(f"Erro ao inserir: {e}")
+        logger.error(f"❌ Erro ao inserir: {e}")
+        logger.error(f"❌ Tipo do erro: {type(e)}")
+        logger.error(f"❌ Detalhes completos: {repr(e)}")
         raise
     finally:
         cur.close()

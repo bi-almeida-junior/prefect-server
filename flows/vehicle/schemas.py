@@ -143,6 +143,7 @@ class PlateRecord(BaseModel):
 def _safe_int(value: Any) -> Optional[int]:
     """Converte valor para int, retorna None se inválido ou fora do range PostgreSQL INTEGER."""
     if value is None:
+        print(f"  ⚠️ _safe_int: valor é None")
         return None
     try:
         # Se for string mascarada (ex: "****"), retorna None
@@ -150,26 +151,32 @@ def _safe_int(value: Any) -> Optional[int]:
             # Remove espaços e verifica se está vazio ou só tem asteriscos
             cleaned = value.replace("*", "").replace("-", "").strip()
             if not cleaned:
+                print(f"  ⚠️ _safe_int: string vazia ou mascarada: '{value}'")
                 return None
 
         # Se for float, valida antes de converter
         if isinstance(value, float):
             # Verifica se é infinito ou NaN
             if not (-2147483648.0 <= value <= 2147483647.0):
+                print(f"  ⚠️ _safe_int: float fora do range PostgreSQL: {value}")
                 return None
 
         num = int(value)
 
         # Valida range para PostgreSQL INTEGER
         if num < -2147483648 or num > 2147483647:
+            print(f"  ⚠️ _safe_int: número fora do range PostgreSQL INTEGER: {num}")
             return None
 
         # Depois valida range razoável para anos
         if num < 1900 or num > 2100:
+            print(f"  ⚠️ _safe_int: ano fora do range razoável (1900-2100): {num}")
             return None
 
+        print(f"  ✅ _safe_int: conversão OK: {value} -> {num}")
         return num
-    except (ValueError, TypeError, OverflowError):
+    except (ValueError, TypeError, OverflowError) as e:
+        print(f"  ❌ _safe_int: erro ao converter '{value}' (tipo: {type(value)}): {e}")
         return None
 
 
@@ -184,11 +191,26 @@ def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -
     Returns:
         Dict pronto para inserção no Snowflake
     """
+    # LOG: dados da API
+    print(f"\n{'='*80}")
+    print(f"🔍 TRANSFORM - PLACA: {plate}")
+    print(f"📥 DADOS DA API (RAW):")
+    print(f"  vehicle_data completo: {vehicle_data}")
+    print(f"  ano (raw): {vehicle_data.get('ano')} | Tipo: {type(vehicle_data.get('ano'))}")
+    print(f"  anoModelo (raw): {vehicle_data.get('anoModelo')} | Tipo: {type(vehicle_data.get('anoModelo'))}")
+    print(f"{'='*80}\n")
+
     color = vehicle_data.get("cor")
 
     # Converte anos com validação e retorna int Python nativo (não numpy.int64)
     ano_fab = _safe_int(vehicle_data.get("ano"))
     ano_modelo = _safe_int(vehicle_data.get("anoModelo"))
+
+    # LOG: valores convertidos
+    print(f"📤 VALORES CONVERTIDOS:")
+    print(f"  ano_fab: {ano_fab} | Tipo: {type(ano_fab)}")
+    print(f"  ano_modelo: {ano_modelo} | Tipo: {type(ano_modelo)}")
+    print(f"{'='*80}\n")
 
     return {
         "DS_PLACA": plate,
