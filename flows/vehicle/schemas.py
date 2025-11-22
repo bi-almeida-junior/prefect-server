@@ -140,6 +140,19 @@ class PlateRecord(BaseModel):
     date: datetime
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    """Converte valor para int, retorna None se inválido."""
+    if value is None:
+        return None
+    try:
+        # Se for string mascarada (ex: "****"), retorna None
+        if isinstance(value, str) and not value.replace("*", "").strip():
+            return None
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Transforma dados da API AnyCar para formato Snowflake.
@@ -157,8 +170,8 @@ def transform_plate_to_snowflake_row(plate: str, vehicle_data: Dict[str, Any]) -
         "DS_PLACA": plate,
         "DS_MARCA": vehicle_data.get("marca"),
         "DS_MODELO": vehicle_data.get("modelo"),
-        "NR_ANO_FABRICACAO": vehicle_data.get("ano"),  # AnyCar usa "ano"
-        "NR_ANO_MODELO": vehicle_data.get("anoModelo"),  # AnyCar usa "anoModelo"
+        "NR_ANO_FABRICACAO": _safe_int(vehicle_data.get("ano")),
+        "NR_ANO_MODELO": _safe_int(vehicle_data.get("anoModelo")),
         "DS_COR": color.upper() if color else None,
         "DT_COLETA_API": get_datetime_brasilia()
     }
