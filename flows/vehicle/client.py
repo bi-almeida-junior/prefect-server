@@ -198,7 +198,7 @@ class AnyCarAPIClient:
                 response_get = curl_requests.get(
                     f"{self.BASE_URL}/{vehicle_id}",
                     headers=headers,
-                    # proxies=self.proxies,  # Sem proxy nessa API
+                    proxies=self.proxies,  # Sem proxy nessa API
                     impersonate="chrome124",
                     timeout=self.TIMEOUT
                 )
